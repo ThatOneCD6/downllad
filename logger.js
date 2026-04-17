@@ -1,7 +1,7 @@
 // Console Logger Plugin for Kettu/Vendetta
 // Logs all Vendetta API availability and plugin loading info to Discord webhook
 
-const WEBHOOK_URL = "https://discord.com/api/webhooks/1494741519888814103/U7zQnqnD2ebxrNbmG8H8qAGDGdswsv5FqgrvRuxHO0IxhLUNz1ty60_2xqD2HA40vXVc"; // Replace with your Discord webhook URL
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1494741519888814103/U7zQnqnD2ebxrNbmG8H8qAGDGdswsv5FqgrvRuxHO0IxhLUNz1ty60_2xqD2HA40vXVc";
 
 function sendToWebhook(title, content, isError = false) {
     try {
@@ -22,8 +22,28 @@ function sendToWebhook(title, content, isError = false) {
     }
 }
 
+// Send immediate test
+try {
+    fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            content: "🔴 **LOGGER PLUGIN FILE LOADED** - onLoad() about to execute"
+        })
+    });
+} catch (e) {}
+
 module.exports = {
     onLoad() {
+        // Immediate notification
+        fetch(WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                content: "🟢 **onLoad() CALLED** - Plugin is executing"
+            })
+        }).catch(() => {});
+        
         let log = "";
         
         log += "=== LOGGER PLUGIN STARTED ===\n";
