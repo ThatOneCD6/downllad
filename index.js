@@ -699,13 +699,19 @@
         }
     }
 
-    function extractTimestampFromSnowflake(snowflake) {
+    function generateSnowflakeFromTimestamp(isoTimestamp) {
         try {
-            const id = BigInt(snowflake);
-            const timestamp = Number(id >> 22n) + DISCORD_EPOCH;
-            return new Date(timestamp).toISOString();
+            const date = new Date(isoTimestamp);
+            const unixMillis = date.getTime();
+            const safeUnixMillis = Math.max(Math.floor(unixMillis), DISCORD_EPOCH);
+            state.snowflakeSequence = (state.snowflakeSequence + 1) % 4096;
+
+            return (
+                (BigInt(safeUnixMillis - DISCORD_EPOCH) << 22n)
+                | BigInt(state.snowflakeSequence)
+            ).toString();
         } catch {
-            return new Date().toISOString();
+            return generateSnowflake();
         }
     }
 
@@ -739,14 +745,15 @@
                                 continue;
                             }
 
-                            // Fix timestamp to match the snowflake ID
-                            const correctedTimestamp = extractTimestampFromSnowflake(message.id);
+                            // Generate a new snowflake ID that matches the original timestamp
+                            const newId = generateSnowflakeFromTimestamp(message.timestamp);
 
-                            // Ensure the message has the internal marker and corrected timestamp
+                            // Ensure the message has the internal marker and matching ID
                             const messageToAdd = {
                                 ...message,
                                 __hiddenDmFake: true,
-                                timestamp: correctedTimestamp,
+                                id: newId,
+                                nonce: newId,
                             };
 
                             // Add each message individually (this calls persistStore)
