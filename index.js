@@ -311,14 +311,26 @@
     }
 
     function createFakeMessage(channelId, userId, content, customTimestamp) {
+        if (!channelId) {
+            return { error: "Missing channel ID." };
+        }
+
+        if (!userId) {
+            return { error: "Missing user ID." };
+        }
+
+        if (typeof content !== "string" || content.trim().length === 0) {
+            return { error: "Missing message content." };
+        }
+
         const user = state.userStore?.getUser?.(userId);
 
         let parsedTimestamp;
 
         try {
             parsedTimestamp = parseUnixTimestamp(customTimestamp);
-        } catch {
-            return null;
+        } catch (error) {
+            return { error: error?.message || "Invalid timestamp." };
         }
 
         const timestamp = parsedTimestamp.isoTimestamp;
@@ -379,6 +391,7 @@
         }
 
         return {
+            ok: true,
             index,
             message: fakeMessage,
         };
@@ -425,6 +438,54 @@
         return `${COMMAND_PREFIX}${name}${args ? ` ${args}` : ""}`;
     }
 
+    function parseCreateFakeCommand(trimmed, rawCommand) {
+        let rest = trimmed.slice(rawCommand.length).trimStart();
+        if (!rest) {
+            return { error: `Usage: ${buildCommandUsage("createfake", "<channel> <user_id> [unix_timestamp] <content>")}` };
+        }
+
+        const nextToken = () => {
+            const spaceIndex = rest.indexOf(" ");
+            if (spaceIndex === -1) {
+                const token = rest;
+                rest = "";
+                return token;
+            }
+
+            const token = rest.slice(0, spaceIndex);
+            rest = rest.slice(spaceIndex + 1).trimStart();
+            return token;
+        };
+
+        const channelId = nextToken();
+        const userId = nextToken();
+
+        if (!channelId || !userId || !rest) {
+            return { error: `Usage: ${buildCommandUsage("createfake", "<channel> <user_id> [unix_timestamp] <content>")}` };
+        }
+
+        let timestamp;
+        let content = rest;
+        const firstSpace = rest.indexOf(" ");
+
+        if (firstSpace !== -1) {
+            const maybeTimestamp = rest.slice(0, firstSpace);
+            const maybeContent = rest.slice(firstSpace + 1).trimStart();
+
+            if (/^-?\d{9,}$/.test(maybeTimestamp) && maybeContent) {
+                timestamp = maybeTimestamp;
+                content = maybeContent;
+            }
+        }
+
+        return {
+            channelId,
+            userId,
+            timestamp,
+            content,
+        };
+    }
+
     function handlePrefixCommand(rawContent) {
         const trimmed = rawContent.trim();
         if (!trimmed.startsWith(COMMAND_PREFIX)) return false;
@@ -458,16 +519,15 @@
         }
 
         if (command === "createfake") {
-            const parts = splitPrefixCommand(trimmed, 5);
-            if (!parts) {
-                showToast(`Usage: ${buildCommandUsage("createfake", "<channel> <user_id> <unix_timestamp> <content>")}`);
+            const parsed = parseCreateFakeCommand(trimmed, rawCommand);
+            if (parsed.error) {
+                showToast(parsed.error);
                 return true;
             }
 
-            const [, channelId, userId, timestamp, content] = parts;
-            const result = createFakeMessage(channelId, userId, content, timestamp);
-            if (!result) {
-                showToast("Failed to create fake message.");
+            const result = createFakeMessage(parsed.channelId, parsed.userId, parsed.content, parsed.timestamp);
+            if (!result?.ok) {
+                showToast(result?.error || "Failed to create fake message.");
             }
 
             return true;
