@@ -21,7 +21,7 @@
         dispatcher: null,
         messageStore: null,
         userStore: null,
-        messageActions: null,
+        selectedChannelStore: null,
         logger: vendetta.logger,
         storage: null,
     };
@@ -181,6 +181,22 @@
         return merged;
     }
 
+    function summarizeContent(message) {
+        if (typeof message.content === "string" && message.content.length > 0) {
+            return message.content.replace(/\s+/g, " ").slice(0, 60);
+        }
+
+        if (Array.isArray(message.embeds) && message.embeds.length > 0) {
+            return `[${message.embeds.length} embed${message.embeds.length === 1 ? "" : "s"}]`;
+        }
+
+        if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+            return `[${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}]`;
+        }
+
+        return "[empty]";
+    }
+
     function injectMessage(channelId, message) {
         try {
             if (!state.dispatcher?.dispatch) return false;
@@ -229,23 +245,33 @@
         let messageContent = content;
         let embeds = [];
         let attachments = [];
+        let overrides = {};
 
         try {
             const parsed = JSON.parse(content);
-            if (typeof parsed.content === "string") {
-                messageContent = parsed.content;
-            }
-            if (Array.isArray(parsed.embeds)) {
-                embeds = parsed.embeds;
-            }
-            if (Array.isArray(parsed.attachments)) {
-                attachments = parsed.attachments;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                overrides = { ...parsed };
+
+                if (typeof parsed.content === "string") {
+                    messageContent = parsed.content;
+                } else if (parsed.content != null) {
+                    messageContent = String(parsed.content);
+                } else {
+                    messageContent = "";
+                }
+
+                if (Array.isArray(parsed.embeds)) {
+                    embeds = parsed.embeds;
+                }
+                if (Array.isArray(parsed.attachments)) {
+                    attachments = parsed.attachments;
+                }
             }
         } catch {
             // Plain text content is still valid.
         }
 
-        return { messageContent, embeds, attachments };
+        return { messageContent, embeds, attachments, overrides };
     }
 
     function createFakeMessage(channelId, userId, content, customTimestamp) {
@@ -260,22 +286,20 @@
         } catch {
             return null;
         }
-        const { messageContent, embeds, attachments } = parseContent(content);
+        const { messageContent, embeds, attachments, overrides } = parseContent(content);
+        const baseAuthor = {
+            id: user.id,
+            username: user.username,
+            discriminator: user.discriminator || "0000",
+            avatar: user.avatar || "",
+            bot: Boolean(user.bot),
+            global_name: user.globalName || user.username,
+        };
+        const overrideAuthor = overrides.author && typeof overrides.author === "object" ? overrides.author : {};
 
         const fakeMessage = {
-            id: messageId,
             type: 0,
             content: messageContent,
-            channel_id: channelId,
-            author: {
-                id: user.id,
-                username: user.username,
-                discriminator: user.discriminator || "0000",
-                avatar: user.avatar || "",
-                bot: Boolean(user.bot),
-                global_name: user.globalName || user.username,
-            },
-            timestamp,
             edited_timestamp: null,
             tts: false,
             mention_everyone: false,
@@ -298,6 +322,18 @@
             interaction: null,
             components: [],
             thread: null,
+            ...overrides,
+            id: messageId,
+            channel_id: channelId,
+            timestamp,
+            content: messageContent,
+            attachments,
+            embeds,
+            nonce: overrides.nonce || messageId,
+            author: {
+                ...overrideAuthor,
+                ...baseAuthor,
+            },
         };
 
         const index = addMessage(channelId, fakeMessage);
@@ -367,7 +403,8 @@
 
                 const lines = messages.map((message) => {
                     const author = message.author?.username || "unknown";
-                    return `[${message.globalIndex}] ${message.channelId} - ${author}`;
+                    const preview = summarizeContent(message);
+                    return `[${message.globalIndex}] ${message.channelId} - ${author} - ${preview}`;
                 });
 
                 return {
@@ -406,7 +443,7 @@
         state.dispatcher = vendetta.metro?.findByProps?.("dispatch", "_subscriptions");
         state.messageStore = vendetta.metro?.findByProps?.("getMessage", "getMessages");
         state.userStore = vendetta.metro?.findByProps?.("getUser", "getUsers");
-        state.messageActions = vendetta.metro?.findByProps?.("sendMessage");
+        state.selectedChannelStore = vendetta.metro?.findByProps?.("getChannel", "getDMUserIds", "getLastSelectedChannelId");
 
         if (!state.dispatcher || !state.messageStore || !state.userStore) {
             log("Failed to find required Discord stores", {
@@ -457,6 +494,11 @@
                 state.dispatcher.subscribe(eventName, listener);
                 state.subscriptions.push({ eventName, listener });
             }
+        }
+
+        const selectedChannelId = state.selectedChannelStore?.getLastSelectedChannelId?.();
+        if (selectedChannelId) {
+            setTimeout(() => reInjectChannel(selectedChannelId), 250);
         }
     }
 
