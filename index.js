@@ -1034,7 +1034,14 @@
 
     function restoreMessagesOnLoad() {
         // Wait for Discord to be fully loaded before restoring messages
-        setTimeout(() => {
+        const attemptRestore = () => {
+            // Check if required stores are available
+            if (!state.dispatcher || !state.messageStore) {
+                log("Discord stores not ready yet, retrying in 1 second...");
+                setTimeout(attemptRestore, 1000);
+                return;
+            }
+
             const store = getStore();
             
             if (!store.messages || typeof store.messages !== "object") {
@@ -1059,7 +1066,10 @@
             if (restoredCount > 0) {
                 log(`Restored ${restoredCount} fake messages from storage`);
             }
-        }, 1000); // Wait 1 second for Discord to fully load
+        };
+
+        // Start attempting after 3 seconds to give Discord time to initialize
+        setTimeout(attemptRestore, 3500);
     }
 
     function cleanup() {
@@ -1080,10 +1090,12 @@
                 getStore();
                 normalizeIndex();
                 persistStore();
+                
+                // Install patches first so the message store hooks are ready
                 installPatches();
                 installPrefixCommands();
 
-                // Restore all fake messages from storage silently
+                // Restore all fake messages from storage silently after patches are installed
                 restoreMessagesOnLoad();
 
                 window.HiddenDM = {
