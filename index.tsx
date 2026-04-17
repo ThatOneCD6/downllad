@@ -1,7 +1,7 @@
 /**
  * HiddenDM Plugin for Kettu/Revenge
  * Create fake messages from any user in DMs
- * @author dylan
+ * @author cd
  */
 
 // Plugin metadata
