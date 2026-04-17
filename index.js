@@ -378,22 +378,26 @@
         return parts;
     }
 
+    function buildCommandUsage(name, args = "") {
+        return `${COMMAND_PREFIX}${name}${args ? ` ${args}` : ""}`;
+    }
+
     function handlePrefixCommand(rawContent) {
         const trimmed = rawContent.trim();
         if (!trimmed.startsWith(COMMAND_PREFIX)) return false;
 
         const [rawCommand] = trimmed.split(/\s+/, 1);
-        const command = rawCommand.toLowerCase();
+        const command = rawCommand.slice(COMMAND_PREFIX.length).toLowerCase();
 
-        if (command === "-listfakes") {
+        if (command === "listfakes") {
             showListDialog(getAllMessages());
             return true;
         }
 
-        if (command === "-delfakes") {
+        if (command === "delfakes") {
             const parts = splitPrefixCommand(trimmed, 2);
             if (!parts) {
-                showToast("Usage: -delfakes <index>");
+                showToast(`Usage: ${buildCommandUsage("delfakes", "<index>")}`);
                 return true;
             }
 
@@ -410,10 +414,10 @@
             return true;
         }
 
-        if (command === "-createfake") {
+        if (command === "createfake") {
             const parts = splitPrefixCommand(trimmed, 5);
             if (!parts) {
-                showToast("Usage: -createfake <channel> <user_id> <unix_timestamp> <content>");
+                showToast(`Usage: ${buildCommandUsage("createfake", "<channel> <user_id> <unix_timestamp> <content>")}`);
                 return true;
             }
 
