@@ -709,7 +709,7 @@
             showToast(`Imported ${countMessagesInStore(nextStore)} fake messages from JSON.`);
         } catch (error) {
             log("Failed to import fake messages", error);
-            showToast(error?.message || "Failed to import fake messages.");
+            showToast(`Import failed: ${error?.message || "Invalid JSON"}`);
         }
     }
 
@@ -840,6 +840,7 @@
             if (inlineJson) {
                 // Check if it's a URL
                 if (inlineJson.startsWith("http://") || inlineJson.startsWith("https://")) {
+                    showToast("Fetching fake messages from URL...");
                     void fetch(inlineJson)
                         .then((response) => {
                             if (!response.ok) {
