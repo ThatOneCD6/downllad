@@ -740,13 +740,13 @@
                         const existingIds = getStoredMessageIdSet(channelId);
                         
                         for (const message of channelMessages) {
-                            // Skip if message already exists
-                            if (existingIds.has(message.id)) {
-                                continue;
-                            }
-
                             // Generate a new snowflake ID that matches the original timestamp
                             const newId = generateSnowflakeFromTimestamp(message.timestamp);
+
+                            // Skip if a message with this NEW ID already exists
+                            if (existingIds.has(newId)) {
+                                continue;
+                            }
 
                             // Ensure the message has the internal marker and matching ID
                             const messageToAdd = {
@@ -910,7 +910,20 @@
 
             const messageCount = channelMessages.length;
             
-            // Remove all messages from the channel
+            // Dispatch delete events for each message to remove them from UI
+            for (const message of channelMessages) {
+                try {
+                    state.dispatcher?.dispatch?.({
+                        type: "MESSAGE_DELETE",
+                        channelId: targetChannelId,
+                        id: message.id,
+                    });
+                } catch (error) {
+                    log("Failed to dispatch message delete", error);
+                }
+            }
+            
+            // Remove all messages from the channel storage
             delete store.messages[targetChannelId];
             normalizeIndex();
             persistStore();
