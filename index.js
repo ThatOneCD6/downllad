@@ -218,6 +218,48 @@
         return "[empty]";
     }
 
+    function injectCreatedMessage(channelId, message) {
+        try {
+            if (!state.dispatcher?.dispatch) return false;
+
+            state.dispatcher.dispatch({
+                type: "MESSAGE_CREATE",
+                channelId,
+                message: {
+                    ...message,
+                    state: "SENT",
+                    flags: message.flags || 0,
+                    blocked: false,
+                    pinned: false,
+                    tts: false,
+                    mention_everyone: false,
+                    mentions: message.mentions || [],
+                    mention_roles: message.mention_roles || [],
+                    reactions: message.reactions || [],
+                    attachments: message.attachments || [],
+                    embeds: message.embeds || [],
+                    _state: {
+                        messageId: message.id,
+                        channelId,
+                        isOptimistic: false,
+                        hasBeenEdited: false,
+                        hasBeenDeleted: false,
+                    },
+                },
+                optimistic: false,
+                suppressNotifications: true,
+                suppressEmbeds: false,
+                isRead: true,
+                isAcknowledged: true,
+            });
+
+            return true;
+        } catch (error) {
+            log("Failed to inject created message", error);
+            return false;
+        }
+    }
+
     function notifyMessageListChanged(channelId) {
         try {
             state.messageStore?.emitChange?.();
@@ -270,7 +312,6 @@
 
     function createFakeMessage(channelId, userId, content, customTimestamp) {
         const user = state.userStore?.getUser?.(userId);
-        if (!user) return null;
 
         let parsedTimestamp;
 
@@ -284,12 +325,12 @@
         const messageId = generateSnowflake(parsedTimestamp.unixMillis);
         const { messageContent, embeds, attachments, overrides } = parseContent(content);
         const baseAuthor = {
-            id: user.id,
-            username: user.username,
-            discriminator: user.discriminator || "0000",
-            avatar: user.avatar || "",
-            bot: Boolean(user.bot),
-            global_name: user.globalName || user.username,
+            id: user?.id || userId,
+            username: user?.username || `user-${String(userId).slice(-4)}`,
+            discriminator: user?.discriminator || "0000",
+            avatar: user?.avatar || "",
+            bot: Boolean(user?.bot),
+            global_name: user?.globalName || user?.username || `user-${String(userId).slice(-4)}`,
         };
         const overrideAuthor = overrides.author && typeof overrides.author === "object" ? overrides.author : {};
 
@@ -333,7 +374,9 @@
         };
 
         const index = addMessage(channelId, fakeMessage);
-        notifyMessageListChanged(channelId);
+        if (!injectCreatedMessage(channelId, fakeMessage)) {
+            notifyMessageListChanged(channelId);
+        }
 
         return {
             index,
