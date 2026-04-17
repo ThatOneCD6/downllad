@@ -1,13 +1,13 @@
 {
-  "name": "Console Logger",
-  "description": "Debug logger for Kettu",
+  "name": "HDM",
+  "description": "Create fake messages in DMs and keep them visible in Kettu.",
   "authors": [
     {
       "name": "cd",
       "id": "1344436675492970616"
     }
   ],
-  "main": "logger.js",
-  "version": "1.0.0",
-  "hash": "ConsoleLogger"
+  "main": "index.js",
+  "hash": "D379EAFB6BA0D6DCAA42B60624AC9207D26CF35137CD850FC09137AD20846A93",
+  "version": "1.0.0"
 }
