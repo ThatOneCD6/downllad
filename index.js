@@ -45,6 +45,14 @@
         return getStore().messages[channelId] || [];
     }
 
+    function isFakeMessage(message) {
+        return Boolean(message?.__hiddenDmFake);
+    }
+
+    function getStoredMessageIdSet(channelId) {
+        return new Set(getStoredMessages(channelId).map((message) => message.id));
+    }
+
     function normalizeIndex() {
         const store = getStore();
         const normalized = [];
@@ -183,8 +191,11 @@
         };
     }
 
-    function mergeMessages(existingMessages, fakeMessages) {
-        const merged = Array.isArray(existingMessages) ? [...existingMessages] : [];
+    function mergeMessages(existingMessages, fakeMessages, channelId) {
+        const storedIds = getStoredMessageIdSet(channelId);
+        const merged = Array.isArray(existingMessages)
+            ? existingMessages.filter((message) => !isFakeMessage(message) || storedIds.has(message?.id))
+            : [];
         const seen = new Set(merged.map((message) => message?.id));
 
         for (const fakeMessage of fakeMessages) {
@@ -349,6 +360,7 @@
         const fakeMessage = {
             type: 0,
             content: messageContent,
+            __hiddenDmFake: true,
             edited_timestamp: null,
             tts: false,
             mention_everyone: false,
@@ -578,11 +590,13 @@
         }
 
         state.patches.push(after("getMessage", state.messageStore, (args, result) => {
-            if (result) return result;
-
             const channelId = args[0];
             const messageId = args[1];
-            return getStoredMessages(channelId).find((message) => message.id === messageId);
+            const storedMessage = getStoredMessages(channelId).find((message) => message.id === messageId);
+
+            if (storedMessage) return storedMessage;
+            if (isFakeMessage(result)) return undefined;
+            return result;
         }));
 
         state.patches.push(after("getMessages", state.messageStore, (args, result) => {
@@ -593,13 +607,13 @@
             if (fakeMessages.length === 0) return result;
 
             if (Array.isArray(result)) {
-                return mergeMessages(result, fakeMessages);
+                return mergeMessages(result, fakeMessages, channelId);
             }
 
             if (Array.isArray(result.messages)) {
                 return {
                     ...result,
-                    messages: mergeMessages(result.messages, fakeMessages),
+                    messages: mergeMessages(result.messages, fakeMessages, channelId),
                 };
             }
 
