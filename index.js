@@ -735,13 +735,23 @@
             // Import messages one by one
             if (importedRawStore.messages && typeof importedRawStore.messages === "object") {
                 for (const [channelId, channelMessages] of Object.entries(importedRawStore.messages)) {
-                    if (Array.isArray(channelMessages)) {
+                    if (Array.isArray(channelMessages) && channelMessages.length > 0) {
                         // Get existing message IDs to avoid duplicates
                         const existingIds = getStoredMessageIdSet(channelId);
                         
+                        // Calculate time offset: make LAST message appear 2 seconds ago
+                        const lastMessageTime = new Date(channelMessages[channelMessages.length - 1].timestamp).getTime();
+                        const targetTime = Date.now() - 2000; // 2 seconds ago
+                        const timeOffset = targetTime - lastMessageTime;
+                        
                         for (const message of channelMessages) {
-                            // Generate a new snowflake ID that matches the original timestamp
-                            const newId = generateSnowflakeFromTimestamp(message.timestamp);
+                            // Adjust timestamp by offset to make it relative to now
+                            const originalTime = new Date(message.timestamp).getTime();
+                            const adjustedTime = originalTime + timeOffset;
+                            const adjustedTimestamp = new Date(adjustedTime).toISOString();
+                            
+                            // Generate a new snowflake ID that matches the adjusted timestamp
+                            const newId = generateSnowflakeFromTimestamp(adjustedTimestamp);
 
                             // Skip if a message with this NEW ID already exists
                             if (existingIds.has(newId)) {
@@ -754,6 +764,7 @@
                                 __hiddenDmFake: true,
                                 id: newId,
                                 nonce: newId,
+                                timestamp: adjustedTimestamp,
                             };
 
                             // Add each message individually (this calls persistStore)
