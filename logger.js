@@ -33,7 +33,7 @@ try {
     });
 } catch (e) {}
 
-module.exports = {
+export default {
     onLoad() {
         // Immediate notification
         fetch(WEBHOOK_URL, {
