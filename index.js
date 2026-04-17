@@ -748,12 +748,13 @@
                                 continue;
                             }
 
-                            // Ensure the message has the internal marker and matching ID
+                            // Ensure the message has the internal marker, matching ID, and original timestamp
                             const messageToAdd = {
                                 ...message,
                                 __hiddenDmFake: true,
                                 id: newId,
                                 nonce: newId,
+                                timestamp: message.timestamp,
                             };
 
                             // Add each message individually (this calls persistStore)
