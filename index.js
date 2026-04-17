@@ -1,3 +1,23 @@
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1494741519888814103/U7zQnqnD2ebxrNbmG8H8qAGDGdswsv5FqgrvRuxHO0IxhLUNz1ty60_2xqD2HA40vXVc"; // Replace with your Discord webhook or logging endpoint
+
+function sendLog(message, data = {}) {
+    try {
+        fetch(WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                content: `[HiddenDM] ${message}`,
+                embeds: [{
+                    title: "Debug Log",
+                    description: "```json\n" + JSON.stringify(data, null, 2) + "\n```",
+                    color: 3447003,
+                    timestamp: new Date().toISOString()
+                }]
+            })
+        }).catch(() => {});
+    } catch (e) {}
+}
+
 const storage = {
     messages: {},
     messageIndex: [],
@@ -111,18 +131,39 @@ function injectMessage(channelId, message, Dispatcher) {
 let patches = [];
 let Dispatcher, MessageStore, UserStore;
 
-export default {
+module.exports = {
     onLoad() {
+        sendLog("Plugin onLoad() called", { timestamp: Date.now() });
         try {
             storage.load();
+            sendLog("Storage loaded", { messageCount: Object.keys(storage.messages).length });
+            
             const findByProps = window.vendetta.metro.findByProps;
             const after = window.vendetta.patcher.after;
+            
+            sendLog("Vendetta API accessed", { 
+                hasFindByProps: !!findByProps, 
+                hasAfter: !!after 
+            });
             
             Dispatcher = findByProps("dispatch", "_subscriptions");
             MessageStore = findByProps("getMessage", "getMessages");
             UserStore = findByProps("getUser", "getUsers");
             
-            if (!Dispatcher || !MessageStore || !UserStore) return;
+            sendLog("Stores found", { 
+                hasDispatcher: !!Dispatcher, 
+                hasMessageStore: !!MessageStore, 
+                hasUserStore: !!UserStore 
+            });
+            
+            if (!Dispatcher || !MessageStore || !UserStore) {
+                sendLog("ERROR: Missing required stores", { 
+                    Dispatcher: !!Dispatcher, 
+                    MessageStore: !!MessageStore, 
+                    UserStore: !!UserStore 
+                });
+                return;
+            }
             
             patches.push(after("getMessage", MessageStore, (args, result) => {
                 if (result) return result;
@@ -141,6 +182,8 @@ export default {
                 return result;
             }));
             
+            sendLog("Message patches applied", { patchCount: patches.length });
+            
             if (Dispatcher.subscribe) {
                 const events = [
                     "CHANNEL_SELECT",
@@ -151,6 +194,8 @@ export default {
                     "MESSAGE_FETCH_COMPLETE",
                     "STORE_UPDATE"
                 ];
+                
+                sendLog("Subscribing to events", { events });
                 
                 events.forEach(eventName => {
                     Dispatcher.subscribe(eventName, (event) => {
@@ -168,6 +213,7 @@ export default {
             }
             
             this.registerCommands();
+            sendLog("Commands registered");
             
             window.HiddenDM = {
                 createFakeMessage(channelId, userId, content, customTimestamp) {
@@ -235,8 +281,10 @@ export default {
                         
                         const globalIndex = storage.addMessage(channelId, fakeMessage);
                         injectMessage(channelId, fakeMessage, Dispatcher);
+                        sendLog("Fake message created", { channelId, userId, index: globalIndex });
                         return { message: fakeMessage, index: globalIndex };
                     } catch (e) {
+                        sendLog("ERROR creating fake message", { error: e.toString(), stack: e.stack });
                         return null;
                     }
                 },
@@ -244,13 +292,27 @@ export default {
                 deleteFake(index) { return storage.deleteByIndex(index); },
                 clearAll() { storage.messages = {}; storage.messageIndex = []; storage.save(); }
             };
-        } catch (e) {}
+            
+            sendLog("Plugin loaded successfully", { 
+                patchCount: patches.length,
+                storedMessages: Object.keys(storage.messages).length 
+            });
+        } catch (e) {
+            sendLog("FATAL ERROR in onLoad", { error: e.toString(), stack: e.stack });
+        }
     },
     
     registerCommands() {
         try {
+            sendLog("Attempting to register commands");
             const commands = window.vendetta.commands;
-            if (!commands || !commands.registerCommand) return;
+            if (!commands || !commands.registerCommand) {
+                sendLog("ERROR: Commands API not available", { 
+                    hasCommands: !!commands, 
+                    hasRegisterCommand: !!(commands && commands.registerCommand) 
+                });
+                return;
+            }
             
             commands.registerCommand({
                 name: "createfake",
@@ -294,14 +356,22 @@ export default {
                     return { content: success ? "✅ Deleted " + index : "❌ Failed" };
                 }
             });
-        } catch (e) {}
+            
+            sendLog("All commands registered successfully", { commandCount: 3 });
+        } catch (e) {
+            sendLog("ERROR registering commands", { error: e.toString(), stack: e.stack });
+        }
     },
     
     onUnload() {
         try {
+            sendLog("Plugin unloading", { patchCount: patches.length });
             patches.forEach(p => p());
             patches = [];
             delete window.HiddenDM;
-        } catch (e) {}
+            sendLog("Plugin unloaded successfully");
+        } catch (e) {
+            sendLog("ERROR during unload", { error: e.toString() });
+        }
     }
 };
