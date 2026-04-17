@@ -1024,6 +1024,31 @@
         }
     }
 
+    function restoreMessagesOnLoad() {
+        const store = getStore();
+        
+        if (!store.messages || typeof store.messages !== "object") {
+            return;
+        }
+
+        let restoredCount = 0;
+        
+        // Silently inject all stored messages without showing toasts
+        for (const [channelId, channelMessages] of Object.entries(store.messages)) {
+            if (Array.isArray(channelMessages)) {
+                for (const message of channelMessages) {
+                    // Inject each message silently
+                    injectCreatedMessage(channelId, message);
+                    restoredCount++;
+                }
+            }
+        }
+
+        if (restoredCount > 0) {
+            log(`Restored ${restoredCount} fake messages from storage`);
+        }
+    }
+
     function cleanup() {
         for (const unpatch of state.patches.splice(0)) {
             try {
@@ -1044,6 +1069,9 @@
                 persistStore();
                 installPatches();
                 installPrefixCommands();
+
+                // Restore all fake messages from storage silently
+                restoreMessagesOnLoad();
 
                 window.HiddenDM = {
                     createFakeMessage,
