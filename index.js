@@ -1,28 +1,16 @@
 (() => {
-    const COMMAND_OPTION_TYPES = {
-        STRING: 3,
-        INTEGER: 4,
-    };
-
-    const REINJECT_EVENTS = [
-        "CHANNEL_SELECT",
-        "LOAD_MESSAGES_SUCCESS",
-        "MESSAGE_LOAD_COMPLETE",
-        "MESSAGE_CACHE_UPDATE",
-        "MESSAGE_HISTORY_LOAD",
-        "MESSAGE_FETCH_COMPLETE",
-        "STORE_UPDATE",
-    ];
+    const DISCORD_EPOCH = 1420070400000;
+    const COMMAND_PREFIX = "-";
 
     const state = {
         patches: [],
-        subscriptions: [],
-        commandUnpatches: [],
         dispatcher: null,
         messageStore: null,
         userStore: null,
         selectedChannelStore: null,
+        messageActions: null,
         logger: vendetta.logger,
+        snowflakeSequence: 0,
         storage: null,
     };
 
@@ -33,6 +21,14 @@
         }
 
         state.logger.log(`[HDM] ${message}`, details);
+    }
+
+    function showToast(message) {
+        try {
+            vendetta.ui?.toasts?.showToast?.(message);
+        } catch (error) {
+            log(message, error);
+        }
     }
 
     function getStore() {
@@ -132,17 +128,7 @@
         }
 
         normalizeIndex();
-
-        try {
-            state.dispatcher?.dispatch?.({
-                type: "MESSAGE_DELETE",
-                channelId: indexEntry.channelId,
-                id: indexEntry.messageId,
-                messageId: indexEntry.messageId,
-            });
-        } catch (error) {
-            log("Failed to dispatch message deletion", error);
-        }
+        notifyMessageListChanged(indexEntry.channelId);
 
         return true;
     }
@@ -153,13 +139,48 @@
         store.messageIndex = [];
     }
 
-    function generateSnowflake() {
-        return ((BigInt(Date.now() - 1420070400000) << 22n)).toString();
+    function generateSnowflake(unixMillis = Date.now()) {
+        const safeUnixMillis = Math.max(Math.floor(unixMillis), DISCORD_EPOCH);
+        state.snowflakeSequence = (state.snowflakeSequence + 1) % 4096;
+
+        return (
+            (BigInt(safeUnixMillis - DISCORD_EPOCH) << 22n)
+            | BigInt(state.snowflakeSequence)
+        ).toString();
     }
 
-    function snowflakeToTimestamp(snowflake) {
-        const unixMillis = Number((BigInt(snowflake) >> 22n) + 1420070400000n);
-        return new Date(unixMillis).toISOString();
+    function parseUnixTimestamp(timestampInput) {
+        if (timestampInput == null || timestampInput === "") {
+            const unixMillis = Date.now();
+            return {
+                unixMillis,
+                isoTimestamp: new Date(unixMillis).toISOString(),
+            };
+        }
+
+        const normalized = String(timestampInput).trim();
+        if (!/^-?\d+$/.test(normalized)) {
+            throw new Error("Timestamp must be Unix seconds or milliseconds.");
+        }
+
+        let unixMillis = Number(normalized);
+        if (!Number.isFinite(unixMillis)) {
+            throw new Error("Timestamp was not a valid number.");
+        }
+
+        if (Math.abs(unixMillis) < 1000000000000) {
+            unixMillis *= 1000;
+        }
+
+        const date = new Date(unixMillis);
+        if (Number.isNaN(date.getTime())) {
+            throw new Error("Timestamp could not be converted to a date.");
+        }
+
+        return {
+            unixMillis,
+            isoTimestamp: date.toISOString(),
+        };
     }
 
     function mergeMessages(existingMessages, fakeMessages) {
@@ -197,47 +218,20 @@
         return "[empty]";
     }
 
-    function injectMessage(channelId, message) {
+    function notifyMessageListChanged(channelId) {
         try {
-            if (!state.dispatcher?.dispatch) return false;
-
-            const messageData = {
-                ...message,
-                state: "SENT",
-                flags: message.flags || 0,
-                blocked: false,
-                pinned: false,
-                tts: false,
-                mention_everyone: false,
-                mentions: message.mentions || [],
-                mention_roles: message.mention_roles || [],
-                reactions: message.reactions || [],
-                attachments: message.attachments || [],
-                embeds: message.embeds || [],
-                _state: {
-                    messageId: message.id,
-                    channelId,
-                    isOptimistic: false,
-                    hasBeenEdited: false,
-                    hasBeenDeleted: false,
-                },
-            };
-
-            state.dispatcher.dispatch({
-                type: "MESSAGE_CREATE",
-                channelId,
-                message: messageData,
-                optimistic: false,
-                suppressNotifications: true,
-                suppressEmbeds: false,
-                isRead: true,
-                isAcknowledged: true,
-            });
-
-            return true;
+            state.messageStore?.emitChange?.();
         } catch (error) {
-            log("Failed to inject message", error);
-            return false;
+            log("Failed to emit message store change", error);
+        }
+
+        try {
+            state.dispatcher?.dispatch?.({
+                type: "MESSAGE_STORE_UPDATE",
+                channelId,
+            });
+        } catch (error) {
+            log("Failed to dispatch message store update", error);
         }
     }
 
@@ -278,14 +272,16 @@
         const user = state.userStore?.getUser?.(userId);
         if (!user) return null;
 
-        const messageId = customTimestamp || generateSnowflake();
-        let timestamp;
+        let parsedTimestamp;
 
         try {
-            timestamp = customTimestamp ? snowflakeToTimestamp(customTimestamp) : new Date().toISOString();
+            parsedTimestamp = parseUnixTimestamp(customTimestamp);
         } catch {
             return null;
         }
+
+        const timestamp = parsedTimestamp.isoTimestamp;
+        const messageId = generateSnowflake(parsedTimestamp.unixMillis);
         const { messageContent, embeds, attachments, overrides } = parseContent(content);
         const baseAuthor = {
             id: user.id,
@@ -337,7 +333,7 @@
         };
 
         const index = addMessage(channelId, fakeMessage);
-        injectMessage(channelId, fakeMessage);
+        notifyMessageListChanged(channelId);
 
         return {
             index,
@@ -345,91 +341,110 @@
         };
     }
 
-    function reInjectChannel(channelId) {
-        if (!channelId) return;
+    function showListDialog(messages) {
+        const showConfirmationAlert = vendetta.ui?.alerts?.showConfirmationAlert;
+        if (typeof showConfirmationAlert !== "function") return;
 
-        const fakeMessages = getStoredMessages(channelId);
-        if (fakeMessages.length === 0) return;
+        const content = messages.length === 0
+            ? "No fake messages saved."
+            : messages.map((message) => {
+                const author = message.author?.username || "unknown";
+                const preview = summarizeContent(message);
+                return `[${message.globalIndex}] ${message.channelId} - ${author} - ${preview}`;
+            }).join("\n");
 
-        for (const message of fakeMessages) {
-            injectMessage(channelId, message);
-        }
+        showConfirmationAlert({
+            title: `Fake Messages (${messages.length})`,
+            content,
+            confirmText: "Close",
+            onConfirm: () => {},
+        });
     }
 
-    function registerCommands() {
-        const registerCommand = vendetta.commands?.registerCommand;
-        if (!registerCommand) {
-            log("Command API was unavailable");
+    function splitPrefixCommand(input, expectedParts) {
+        const parts = [];
+        let rest = input.trim();
+
+        for (let index = 0; index < expectedParts - 1; index++) {
+            const nextSpace = rest.indexOf(" ");
+            if (nextSpace === -1) return null;
+
+            parts.push(rest.slice(0, nextSpace));
+            rest = rest.slice(nextSpace + 1).trimStart();
+            if (!rest) return null;
+        }
+
+        parts.push(rest);
+        return parts;
+    }
+
+    function handlePrefixCommand(rawContent) {
+        const trimmed = rawContent.trim();
+        if (!trimmed.startsWith(COMMAND_PREFIX)) return false;
+
+        const [rawCommand] = trimmed.split(/\s+/, 1);
+        const command = rawCommand.toLowerCase();
+
+        if (command === "-listfakes") {
+            showListDialog(getAllMessages());
+            return true;
+        }
+
+        if (command === "-delfakes") {
+            const parts = splitPrefixCommand(trimmed, 2);
+            if (!parts) {
+                showToast("Usage: -delfakes <index>");
+                return true;
+            }
+
+            const index = Number(parts[1]);
+            if (!Number.isInteger(index)) {
+                showToast("Fake message index must be a number.");
+                return true;
+            }
+
+            if (!deleteByIndex(index)) {
+                showToast(`No fake message exists at index ${index}.`);
+            }
+
+            return true;
+        }
+
+        if (command === "-createfake") {
+            const parts = splitPrefixCommand(trimmed, 5);
+            if (!parts) {
+                showToast("Usage: -createfake <channel> <user_id> <unix_timestamp> <content>");
+                return true;
+            }
+
+            const [, channelId, userId, timestamp, content] = parts;
+            const result = createFakeMessage(channelId, userId, content, timestamp);
+            if (!result) {
+                showToast("Failed to create fake message.");
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    function installPrefixCommands() {
+        const instead = vendetta.patcher?.instead;
+        if (!instead || !state.messageActions?.sendMessage) {
+            log("Prefix command patch could not be installed");
             return;
         }
 
-        state.commandUnpatches.push(registerCommand({
-            name: "createfake",
-            description: "Create a fake message",
-            options: [
-                { name: "channel", description: "Channel ID", type: COMMAND_OPTION_TYPES.STRING, required: true },
-                { name: "user", description: "User ID", type: COMMAND_OPTION_TYPES.STRING, required: true },
-                { name: "timestamp", description: "Timestamp snowflake", type: COMMAND_OPTION_TYPES.STRING, required: false },
-                { name: "content", description: "Message content or JSON payload", type: COMMAND_OPTION_TYPES.STRING, required: true },
-            ],
-            execute: (args) => {
-                const channelId = args.find((arg) => arg.name === "channel")?.value;
-                const userId = args.find((arg) => arg.name === "user")?.value;
-                const timestamp = args.find((arg) => arg.name === "timestamp")?.value;
-                const content = args.find((arg) => arg.name === "content")?.value;
+        state.patches.push(instead("sendMessage", state.messageActions, (args, original) => {
+            const [channelId, message] = args;
+            const content = message?.content;
 
-                if (!channelId || !userId || !content) {
-                    return { content: "Missing required arguments." };
-                }
+            if (typeof content === "string" && handlePrefixCommand(content)) {
+                return;
+            }
 
-                const result = createFakeMessage(channelId, userId, content, timestamp);
-                if (!result) {
-                    return { content: "Failed to create a fake message." };
-                }
-
-                return { content: `Created fake message at index ${result.index}.` };
-            },
-        }));
-
-        state.commandUnpatches.push(registerCommand({
-            name: "listfakes",
-            description: "List all fake messages",
-            options: [],
-            execute: () => {
-                const messages = getAllMessages();
-                if (messages.length === 0) {
-                    return { content: "No fake messages saved." };
-                }
-
-                const lines = messages.map((message) => {
-                    const author = message.author?.username || "unknown";
-                    const preview = summarizeContent(message);
-                    return `[${message.globalIndex}] ${message.channelId} - ${author} - ${preview}`;
-                });
-
-                return {
-                    content: `**Fake Messages (${messages.length})**\n${lines.join("\n")}`,
-                };
-            },
-        }));
-
-        state.commandUnpatches.push(registerCommand({
-            name: "delfakes",
-            description: "Delete a fake message by index",
-            options: [
-                { name: "index", description: "Saved message index", type: COMMAND_OPTION_TYPES.INTEGER, required: true },
-            ],
-            execute: (args) => {
-                const rawIndex = args.find((arg) => arg.name === "index")?.value;
-                const index = Number(rawIndex);
-                if (!Number.isInteger(index)) {
-                    return { content: "Index must be a number." };
-                }
-
-                return deleteByIndex(index)
-                    ? { content: `Deleted fake message ${index}.` }
-                    : { content: `No fake message exists at index ${index}.` };
-            },
+            return original.apply(state.messageActions, args);
         }));
     }
 
@@ -444,6 +459,7 @@
         state.messageStore = vendetta.metro?.findByProps?.("getMessage", "getMessages");
         state.userStore = vendetta.metro?.findByProps?.("getUser", "getUsers");
         state.selectedChannelStore = vendetta.metro?.findByProps?.("getChannel", "getDMUserIds", "getLastSelectedChannelId");
+        state.messageActions = vendetta.metro?.findByProps?.("sendMessage");
 
         if (!state.dispatcher || !state.messageStore || !state.userStore) {
             log("Failed to find required Discord stores", {
@@ -483,52 +499,19 @@
             return result;
         }));
 
-        if (typeof state.dispatcher.subscribe === "function") {
-            for (const eventName of REINJECT_EVENTS) {
-                const listener = (event) => {
-                    if (!event?.channelId) return;
-                    const delay = eventName === "STORE_UPDATE" ? 75 : 0;
-                    setTimeout(() => reInjectChannel(event.channelId), delay);
-                };
-
-                state.dispatcher.subscribe(eventName, listener);
-                state.subscriptions.push({ eventName, listener });
-            }
-        }
-
         const selectedChannelId = state.selectedChannelStore?.getLastSelectedChannelId?.();
         if (selectedChannelId) {
-            setTimeout(() => reInjectChannel(selectedChannelId), 250);
+            setTimeout(() => notifyMessageListChanged(selectedChannelId), 250);
         }
     }
 
     function cleanup() {
-        for (const unpatch of state.commandUnpatches.splice(0)) {
-            try {
-                unpatch();
-            } catch (error) {
-                log("Failed to unregister command", error);
-            }
-        }
-
         for (const unpatch of state.patches.splice(0)) {
             try {
                 unpatch();
             } catch (error) {
                 log("Failed to remove patch", error);
             }
-        }
-
-        if (typeof state.dispatcher?.unsubscribe === "function") {
-            for (const { eventName, listener } of state.subscriptions.splice(0)) {
-                try {
-                    state.dispatcher.unsubscribe(eventName, listener);
-                } catch (error) {
-                    log(`Failed to unsubscribe from ${eventName}`, error);
-                }
-            }
-        } else {
-            state.subscriptions = [];
         }
 
         delete window.HiddenDM;
@@ -540,14 +523,14 @@
                 getStore();
                 normalizeIndex();
                 installPatches();
-                registerCommands();
+                installPrefixCommands();
 
                 window.HiddenDM = {
                     createFakeMessage,
                     listFakes: getAllMessages,
                     deleteFake: deleteByIndex,
                     clearAll,
-                    reInjectChannel,
+                    refreshChannel: notifyMessageListChanged,
                 };
 
                 log("Plugin loaded");
