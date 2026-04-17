@@ -256,21 +256,32 @@
         const indexEntry = store.messageIndex[globalIndex];
         if (!indexEntry) return false;
 
-        const channelMessages = store.messages[indexEntry.channelId];
+        const channelId = indexEntry.channelId;
+        const channelMessages = store.messages[channelId];
         if (!Array.isArray(channelMessages)) return false;
 
+        // If deleting index 0, delete all messages from that channel
+        if (globalIndex === 0) {
+            delete store.messages[channelId];
+            normalizeIndex();
+            persistStore();
+            notifyMessageListChanged(channelId);
+            return true;
+        }
+
+        // Otherwise, delete just the single message
         const nextMessages = channelMessages.filter((message) => message.id !== indexEntry.messageId);
         if (nextMessages.length === channelMessages.length) return false;
 
         if (nextMessages.length === 0) {
-            delete store.messages[indexEntry.channelId];
+            delete store.messages[channelId];
         } else {
-            store.messages[indexEntry.channelId] = nextMessages;
+            store.messages[channelId] = nextMessages;
         }
 
         normalizeIndex();
         persistStore();
-        notifyMessageListChanged(indexEntry.channelId);
+        notifyMessageListChanged(channelId);
 
         return true;
     }
@@ -700,24 +711,26 @@
                 return;
             }
 
-            const previousStore = getStore();
-            const previousChannelIds = Object.keys(previousStore.messages || {});
-            const nextStore = applyStore(importedRawStore);
-            const nextChannelIds = Object.keys(nextStore.messages || {});
+            let totalImported = 0;
 
-            // Inject all imported messages to make them visible
-            if (nextStore.messages && typeof nextStore.messages === "object") {
-                for (const [channelId, channelMessages] of Object.entries(nextStore.messages)) {
+            // Import messages one by one
+            if (importedRawStore.messages && typeof importedRawStore.messages === "object") {
+                for (const [channelId, channelMessages] of Object.entries(importedRawStore.messages)) {
                     if (Array.isArray(channelMessages)) {
                         for (const message of channelMessages) {
-                            injectCreatedMessage(channelId, message);
+                            // Add each message individually
+                            addMessage(channelId, message);
+                            // Inject to make it visible
+                            if (!injectCreatedMessage(channelId, message)) {
+                                notifyMessageListChanged(channelId);
+                            }
+                            totalImported++;
                         }
                     }
                 }
             }
 
-            notifyChannelsChanged(new Set([...previousChannelIds, ...nextChannelIds]));
-            showToast(`Imported ${countMessagesInStore(nextStore)} fake messages from JSON.`);
+            showToast(`Imported ${totalImported} fake messages from JSON.`);
         } catch (error) {
             log("Failed to import fake messages", error);
             showToast(`Import failed: ${error?.message || "Invalid JSON"}`);
