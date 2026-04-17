@@ -910,20 +910,7 @@
 
             const messageCount = channelMessages.length;
             
-            // Dispatch delete events for each message to remove them from UI
-            for (const message of channelMessages) {
-                try {
-                    state.dispatcher?.dispatch?.({
-                        type: "MESSAGE_DELETE",
-                        channelId: targetChannelId,
-                        id: message.id,
-                    });
-                } catch (error) {
-                    log("Failed to dispatch message delete", error);
-                }
-            }
-            
-            // Remove all messages from the channel storage
+            // Remove all messages from the channel
             delete store.messages[targetChannelId];
             normalizeIndex();
             persistStore();
