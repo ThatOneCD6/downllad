@@ -735,23 +735,13 @@
             // Import messages one by one
             if (importedRawStore.messages && typeof importedRawStore.messages === "object") {
                 for (const [channelId, channelMessages] of Object.entries(importedRawStore.messages)) {
-                    if (Array.isArray(channelMessages) && channelMessages.length > 0) {
+                    if (Array.isArray(channelMessages)) {
                         // Get existing message IDs to avoid duplicates
                         const existingIds = getStoredMessageIdSet(channelId);
                         
-                        // Calculate time offset: make LAST message appear 2 seconds ago
-                        const lastMessageTime = new Date(channelMessages[channelMessages.length - 1].timestamp).getTime();
-                        const targetTime = Date.now() - 2000; // 2 seconds ago
-                        const timeOffset = targetTime - lastMessageTime;
-                        
                         for (const message of channelMessages) {
-                            // Adjust timestamp by offset to make it relative to now
-                            const originalTime = new Date(message.timestamp).getTime();
-                            const adjustedTime = originalTime + timeOffset;
-                            const adjustedTimestamp = new Date(adjustedTime).toISOString();
-                            
-                            // Generate a new snowflake ID that matches the adjusted timestamp
-                            const newId = generateSnowflakeFromTimestamp(adjustedTimestamp);
+                            // Generate a new snowflake ID that matches the original timestamp
+                            const newId = generateSnowflakeFromTimestamp(message.timestamp);
 
                             // Skip if a message with this NEW ID already exists
                             if (existingIds.has(newId)) {
@@ -764,7 +754,6 @@
                                 __hiddenDmFake: true,
                                 id: newId,
                                 nonce: newId,
-                                timestamp: adjustedTimestamp,
                             };
 
                             // Add each message individually (this calls persistStore)
@@ -921,20 +910,7 @@
 
             const messageCount = channelMessages.length;
             
-            // Dispatch delete events for each message to remove them from UI
-            for (const message of channelMessages) {
-                try {
-                    state.dispatcher?.dispatch?.({
-                        type: "MESSAGE_DELETE",
-                        channelId: targetChannelId,
-                        id: message.id,
-                    });
-                } catch (error) {
-                    log("Failed to dispatch message delete", error);
-                }
-            }
-            
-            // Remove all messages from the channel storage
+            // Remove all messages from the channel
             delete store.messages[targetChannelId];
             normalizeIndex();
             persistStore();
