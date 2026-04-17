@@ -1,17 +1,20 @@
 (() => {
     const DISCORD_EPOCH = 1420070400000;
     const COMMAND_PREFIX = "--|-";
+    const STORAGE_KEY = "__hiddenDmState";
 
     const state = {
         patches: [],
         dispatcher: null,
         messageStore: null,
         userStore: null,
+        currentUserStore: null,
         selectedChannelStore: null,
         messageActions: null,
         logger: vendetta.logger,
         snowflakeSequence: 0,
         storage: null,
+        storeData: null,
     };
 
     function log(message, details) {
@@ -31,14 +34,140 @@
         }
     }
 
+    function createEmptyStore() {
+        return {
+            messages: {},
+            messageIndex: [],
+        };
+    }
+
+    function cloneJson(value, fallback) {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return fallback;
+        }
+    }
+
+    function sanitizeStore(rawStore) {
+        const safeStore = createEmptyStore();
+        if (!rawStore || typeof rawStore !== "object") {
+            return safeStore;
+        }
+
+        if (rawStore.messages && typeof rawStore.messages === "object") {
+            for (const [channelId, channelMessages] of Object.entries(rawStore.messages)) {
+                if (!Array.isArray(channelMessages)) continue;
+                safeStore.messages[channelId] = cloneJson(channelMessages, [])
+                    .filter((message) => message && typeof message === "object")
+                    .map((message) => ({
+                        ...message,
+                        __hiddenDmFake: true,
+                    }));
+            }
+        }
+
+        if (Array.isArray(rawStore.messageIndex)) {
+            safeStore.messageIndex = cloneJson(rawStore.messageIndex, []);
+        }
+
+        return safeStore;
+    }
+
+    function countMessagesInStore(store) {
+        if (!store?.messages || typeof store.messages !== "object") return 0;
+
+        let count = 0;
+        for (const channelMessages of Object.values(store.messages)) {
+            if (Array.isArray(channelMessages)) {
+                count += channelMessages.length;
+            }
+        }
+
+        return count;
+    }
+
+    function persistStore() {
+        if (!state.storage || !state.storeData) return;
+
+        const serialized = JSON.stringify(state.storeData);
+        const messagesClone = cloneJson(state.storeData.messages, {});
+        const indexClone = cloneJson(state.storeData.messageIndex, []);
+
+        state.storage[STORAGE_KEY] = serialized;
+        state.storage.messages = messagesClone;
+        state.storage.messageIndex = indexClone;
+    }
+
     function getStore() {
         if (!state.storage) {
             state.storage = vendetta.plugin.storage;
-            state.storage.messages ??= {};
-            state.storage.messageIndex ??= [];
         }
 
-        return state.storage;
+        if (!state.storeData) {
+            let loadedStore = null;
+
+            if (typeof state.storage[STORAGE_KEY] === "string") {
+                try {
+                    loadedStore = JSON.parse(state.storage[STORAGE_KEY]);
+                } catch (error) {
+                    log("Failed to parse saved fake message state", error);
+                }
+            }
+
+            if (!loadedStore) {
+                loadedStore = {
+                    messages: state.storage.messages,
+                    messageIndex: state.storage.messageIndex,
+                };
+            }
+
+            state.storeData = sanitizeStore(loadedStore);
+            persistStore();
+        }
+
+        return state.storeData;
+    }
+
+    function getCurrentUser() {
+        return state.currentUserStore?.getCurrentUser?.()
+            || state.userStore?.getCurrentUser?.()
+            || null;
+    }
+
+    function getClipboardApi() {
+        return vendetta.metro?.common?.clipboard
+            || vendetta.metro?.findByProps?.("setString", "getString")
+            || null;
+    }
+
+    async function readClipboardText() {
+        const clipboard = getClipboardApi();
+        if (!clipboard?.getString) {
+            throw new Error("Clipboard import is unavailable.");
+        }
+
+        const value = clipboard.getString();
+        return typeof value?.then === "function" ? await value : value;
+    }
+
+    async function writeClipboardText(content) {
+        const clipboard = getClipboardApi();
+        if (!clipboard?.setString) {
+            throw new Error("Clipboard export is unavailable.");
+        }
+
+        const value = clipboard.setString(content);
+        if (typeof value?.then === "function") {
+            await value;
+        }
+    }
+
+    function applyStore(rawStore) {
+        state.storeData = sanitizeStore(rawStore);
+        normalizeIndex();
+        persistStore();
+        return state.storeData;
     }
 
     function getStoredMessages(channelId) {
@@ -95,6 +224,7 @@
         store.messages[channelId] ??= [];
         store.messages[channelId].push(message);
         normalizeIndex();
+        persistStore();
 
         const entry = store.messageIndex.find((item) => item.messageId === message.id);
         return entry ? entry.index : -1;
@@ -136,6 +266,7 @@
         }
 
         normalizeIndex();
+        persistStore();
         notifyMessageListChanged(indexEntry.channelId);
 
         return true;
@@ -145,6 +276,7 @@
         const store = getStore();
         store.messages = {};
         store.messageIndex = [];
+        persistStore();
     }
 
     function generateSnowflake(unixMillis = Date.now()) {
@@ -271,6 +403,63 @@
         }
     }
 
+    function injectTransientExportMessage(channelId, jsonContent) {
+        const currentUser = getCurrentUser();
+        if (!channelId) {
+            return { error: "Open the target DM before exporting as a transient message." };
+        }
+
+        if (!currentUser?.id) {
+            return { error: "Could not resolve your current user." };
+        }
+
+        const unixMillis = Date.now();
+        const message = {
+            id: generateSnowflake(unixMillis),
+            type: 0,
+            content: jsonContent,
+            timestamp: new Date(unixMillis).toISOString(),
+            channel_id: channelId,
+            edited_timestamp: null,
+            tts: false,
+            mention_everyone: false,
+            mentions: [],
+            mention_roles: [],
+            attachments: [],
+            embeds: [],
+            reactions: [],
+            pinned: false,
+            state: "SENT",
+            flags: 0,
+            nonce: generateSnowflake(unixMillis + 1),
+            webhook_id: null,
+            application: null,
+            activity: null,
+            application_id: null,
+            message_flags: 0,
+            sticker_items: [],
+            referenced_message: null,
+            interaction: null,
+            components: [],
+            thread: null,
+            __hiddenDmExport: true,
+            author: {
+                id: currentUser.id,
+                username: currentUser.username || "you",
+                discriminator: currentUser.discriminator || "0000",
+                avatar: currentUser.avatar || "",
+                bot: Boolean(currentUser.bot),
+                global_name: currentUser.globalName || currentUser.username || "you",
+            },
+        };
+
+        if (!injectCreatedMessage(channelId, message)) {
+            return { error: "Failed to inject export message." };
+        }
+
+        return { ok: true };
+    }
+
     function notifyMessageListChanged(channelId) {
         try {
             state.messageStore?.emitChange?.();
@@ -285,6 +474,14 @@
             });
         } catch (error) {
             log("Failed to dispatch message store update", error);
+        }
+    }
+
+    function notifyChannelsChanged(channelIds) {
+        for (const channelId of channelIds) {
+            if (channelId) {
+                notifyMessageListChanged(channelId);
+            }
         }
     }
 
@@ -429,6 +626,63 @@
         });
     }
 
+    function serializeStoreForExport() {
+        return JSON.stringify({
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            data: cloneJson(getStore(), createEmptyStore()),
+        }, null, 2);
+    }
+
+    async function exportFakes(mode = "clipboard", channelId) {
+        try {
+            const store = getStore();
+            const jsonContent = serializeStoreForExport();
+            await writeClipboardText(jsonContent);
+
+            if (mode === "dm") {
+                const injected = injectTransientExportMessage(channelId, jsonContent);
+                if (!injected?.ok) {
+                    showToast(injected?.error || "Failed to export fake messages as a DM.");
+                    return;
+                }
+
+                showToast(`Exported ${countMessagesInStore(store)} fake messages as JSON and copied them to clipboard.`);
+                return;
+            }
+
+            showToast(`Copied ${countMessagesInStore(store)} fake messages as JSON to clipboard.`);
+        } catch (error) {
+            log("Failed to export fake messages", error);
+            showToast(error?.message || "Failed to export fake messages.");
+        }
+    }
+
+    async function importFakesFromJson(jsonText) {
+        try {
+            const backupPayload = JSON.parse(jsonText);
+            const importedRawStore = backupPayload?.version === 1 && backupPayload?.data
+                ? backupPayload.data
+                : (backupPayload?.messages || backupPayload?.messageIndex ? backupPayload : null);
+
+            if (!importedRawStore) {
+                showToast("No fake message backup was found.");
+                return;
+            }
+
+            const previousStore = getStore();
+            const previousChannelIds = Object.keys(previousStore.messages || {});
+            const nextStore = applyStore(importedRawStore);
+            const nextChannelIds = Object.keys(nextStore.messages || {});
+
+            notifyChannelsChanged(new Set([...previousChannelIds, ...nextChannelIds]));
+            showToast(`Imported ${countMessagesInStore(nextStore)} fake messages from JSON.`);
+        } catch (error) {
+            log("Failed to import fake messages", error);
+            showToast(error?.message || "Failed to import fake messages.");
+        }
+    }
+
     function splitPrefixCommand(input, expectedParts) {
         const parts = [];
         let rest = input.trim();
@@ -498,7 +752,7 @@
         };
     }
 
-    function handlePrefixCommand(rawContent) {
+    function handlePrefixCommand(rawContent, channelId) {
         const trimmed = rawContent.trim();
         if (!trimmed.startsWith(COMMAND_PREFIX)) return false;
 
@@ -545,6 +799,25 @@
             return true;
         }
 
+        if (command === "exportfakes") {
+            const mode = trimmed.slice(rawCommand.length).trim().toLowerCase();
+            void exportFakes(mode === "dm" ? "dm" : "clipboard", channelId);
+            return true;
+        }
+
+        if (command === "importfakes") {
+            const inlineJson = trimmed.slice(rawCommand.length).trim();
+            if (inlineJson) {
+                void importFakesFromJson(inlineJson);
+            } else {
+                void readClipboardText().then(importFakesFromJson).catch((error) => {
+                    log("Failed to read fake message import JSON from clipboard", error);
+                    showToast(error?.message || "Clipboard import failed.");
+                });
+            }
+            return true;
+        }
+
         return false;
     }
 
@@ -559,7 +832,7 @@
             const [channelId, message] = args;
             const content = message?.content;
 
-            if (typeof content === "string" && handlePrefixCommand(content)) {
+            if (typeof content === "string" && handlePrefixCommand(content, channelId)) {
                 return;
             }
 
@@ -577,6 +850,7 @@
         state.dispatcher = vendetta.metro?.findByProps?.("dispatch", "_subscriptions");
         state.messageStore = vendetta.metro?.findByProps?.("getMessage", "getMessages");
         state.userStore = vendetta.metro?.findByProps?.("getUser", "getUsers");
+        state.currentUserStore = vendetta.metro?.findByProps?.("getCurrentUser", "getUser");
         state.selectedChannelStore = vendetta.metro?.findByProps?.("getChannel", "getDMUserIds", "getLastSelectedChannelId");
         state.messageActions = vendetta.metro?.findByProps?.("sendMessage");
 
@@ -643,6 +917,7 @@
             try {
                 getStore();
                 normalizeIndex();
+                persistStore();
                 installPatches();
                 installPrefixCommands();
 
