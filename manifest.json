@@ -3,11 +3,11 @@
   "description": "Create fake messages in DMs and keep them visible in Kettu.",
   "authors": [
     {
-      "name": "cd",
+      "name": "ThatOneCD666",
       "id": "1344436675492970616"
     }
   ],
   "main": "index.js",
-  "hash": "92E56D135A4FE201029DC9346D4A1CC6BB7A9CBDF8FA79649CB19E1FB47C93B6",
-  "version": "1.0.0"
+  "hash": "2D3652F01017387600AC8DA02B2BD345FAC4E24860774A172465C9BDCE34889E",
+  "version": "1.8.0"
 }
