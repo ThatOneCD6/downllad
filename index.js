@@ -838,7 +838,23 @@
         if (command === "importfakes") {
             const inlineJson = trimmed.slice(rawCommand.length).trim();
             if (inlineJson) {
-                void importFakesFromJson(inlineJson);
+                // Check if it's a URL
+                if (inlineJson.startsWith("http://") || inlineJson.startsWith("https://")) {
+                    void fetch(inlineJson)
+                        .then((response) => {
+                            if (!response.ok) {
+                                throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+                            }
+                            return response.text();
+                        })
+                        .then(importFakesFromJson)
+                        .catch((error) => {
+                            log("Failed to fetch fake message import JSON from URL", error);
+                            showToast(error?.message || "URL import failed.");
+                        });
+                } else {
+                    void importFakesFromJson(inlineJson);
+                }
             } else {
                 void readClipboardText().then(importFakesFromJson).catch((error) => {
                     log("Failed to read fake message import JSON from clipboard", error);
