@@ -712,24 +712,44 @@
             }
 
             let totalImported = 0;
+            const store = getStore();
 
             // Import messages one by one
             if (importedRawStore.messages && typeof importedRawStore.messages === "object") {
                 for (const [channelId, channelMessages] of Object.entries(importedRawStore.messages)) {
                     if (Array.isArray(channelMessages)) {
+                        // Get existing message IDs to avoid duplicates
+                        const existingIds = getStoredMessageIdSet(channelId);
+                        
                         for (const message of channelMessages) {
-                            // Add each message individually
-                            addMessage(channelId, message);
+                            // Skip if message already exists
+                            if (existingIds.has(message.id)) {
+                                continue;
+                            }
+
+                            // Ensure the message has the internal marker
+                            const messageToAdd = {
+                                ...message,
+                                __hiddenDmFake: true,
+                            };
+
+                            // Add each message individually (this calls persistStore)
+                            addMessage(channelId, messageToAdd);
+                            
                             // Inject to make it visible
-                            if (!injectCreatedMessage(channelId, message)) {
+                            if (!injectCreatedMessage(channelId, messageToAdd)) {
                                 notifyMessageListChanged(channelId);
                             }
+                            
                             totalImported++;
                         }
                     }
                 }
             }
 
+            // Final persist to ensure everything is saved
+            persistStore();
+            
             showToast(`Imported ${totalImported} fake messages from JSON.`);
         } catch (error) {
             log("Failed to import fake messages", error);
