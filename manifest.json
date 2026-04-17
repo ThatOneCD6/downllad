@@ -1,13 +1,13 @@
 {
-  "name": "HDM",
-  "description": "Create",
+  "name": "Console Logger",
+  "description": "Debug logger for Kettu",
   "authors": [
     {
       "name": "cd",
       "id": "1344436675492970616"
     }
   ],
-  "main": "index.js",
+  "main": "logger.js",
   "version": "1.0.0",
-  "hash": "HiddenDM"
+  "hash": "ConsoleLogger"
 }
