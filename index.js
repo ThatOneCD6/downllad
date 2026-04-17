@@ -1,6 +1,6 @@
 (() => {
     const DISCORD_EPOCH = 1420070400000;
-    const COMMAND_PREFIX = "-";
+    const COMMAND_PREFIX = "--|-";
 
     const state = {
         patches: [],
