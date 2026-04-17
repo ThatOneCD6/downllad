@@ -60,10 +60,13 @@
                 if (!Array.isArray(channelMessages)) continue;
                 safeStore.messages[channelId] = cloneJson(channelMessages, [])
                     .filter((message) => message && typeof message === "object")
-                    .map((message) => ({
-                        ...message,
-                        __hiddenDmFake: true,
-                    }));
+                    .map((message) => {
+                        const { __hiddenDmFake, __hiddenDmExport, ...cleanMessage } = message;
+                        return {
+                            ...cleanMessage,
+                            __hiddenDmFake: true,
+                        };
+                    });
             }
         }
 
@@ -347,7 +350,12 @@
 
     function summarizeContent(message) {
         if (typeof message.content === "string" && message.content.length > 0) {
-            return message.content.replace(/\s+/g, " ").slice(0, 60);
+            const normalized = message.content.replace(/\s+/g, " ");
+            // Don't truncate command prefix messages
+            if (normalized.startsWith(COMMAND_PREFIX)) {
+                return normalized;
+            }
+            return normalized.slice(0, 60);
         }
 
         if (Array.isArray(message.embeds) && message.embeds.length > 0) {
@@ -627,10 +635,32 @@
     }
 
     function serializeStoreForExport() {
+        const store = getStore();
+        const cleanData = {
+            messages: {},
+            messageIndex: [],
+        };
+
+        // Clean messages by removing internal markers
+        if (store.messages && typeof store.messages === "object") {
+            for (const [channelId, channelMessages] of Object.entries(store.messages)) {
+                if (!Array.isArray(channelMessages)) continue;
+                cleanData.messages[channelId] = channelMessages.map((message) => {
+                    const { __hiddenDmFake, __hiddenDmExport, ...cleanMessage } = message;
+                    return cleanMessage;
+                });
+            }
+        }
+
+        // Clean messageIndex
+        if (Array.isArray(store.messageIndex)) {
+            cleanData.messageIndex = cloneJson(store.messageIndex, []);
+        }
+
         return JSON.stringify({
             version: 1,
             exportedAt: new Date().toISOString(),
-            data: cloneJson(getStore(), createEmptyStore()),
+            data: cleanData,
         }, null, 2);
     }
 
