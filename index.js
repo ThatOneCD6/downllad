@@ -858,6 +858,39 @@
             return true;
         }
 
+        if (command === "purgefakes") {
+            const parts = splitPrefixCommand(trimmed, 2);
+            if (!parts) {
+                showToast(`Usage: ${buildCommandUsage("purgefakes", "<channel_id>")}`);
+                return true;
+            }
+
+            const targetChannelId = parts[1].trim();
+            if (!targetChannelId) {
+                showToast("Channel ID is required.");
+                return true;
+            }
+
+            const store = getStore();
+            const channelMessages = store.messages[targetChannelId];
+            
+            if (!channelMessages || !Array.isArray(channelMessages) || channelMessages.length === 0) {
+                showToast(`No fake messages found in channel ${targetChannelId}.`);
+                return true;
+            }
+
+            const messageCount = channelMessages.length;
+            
+            // Remove all messages from the channel
+            delete store.messages[targetChannelId];
+            normalizeIndex();
+            persistStore();
+            notifyMessageListChanged(targetChannelId);
+            
+            showToast(`Purged ${messageCount} fake messages from channel ${targetChannelId}.`);
+            return true;
+        }
+
         if (command === "createfake") {
             const parsed = parseCreateFakeCommand(trimmed, rawCommand);
             if (parsed.error) {
