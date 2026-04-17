@@ -699,6 +699,16 @@
         }
     }
 
+    function extractTimestampFromSnowflake(snowflake) {
+        try {
+            const id = BigInt(snowflake);
+            const timestamp = Number(id >> 22n) + DISCORD_EPOCH;
+            return new Date(timestamp).toISOString();
+        } catch {
+            return new Date().toISOString();
+        }
+    }
+
     async function importFakesFromJson(jsonText, silent = false) {
         try {
             const backupPayload = JSON.parse(jsonText);
@@ -729,10 +739,14 @@
                                 continue;
                             }
 
-                            // Ensure the message has the internal marker
+                            // Fix timestamp to match the snowflake ID
+                            const correctedTimestamp = extractTimestampFromSnowflake(message.id);
+
+                            // Ensure the message has the internal marker and corrected timestamp
                             const messageToAdd = {
                                 ...message,
                                 __hiddenDmFake: true,
+                                timestamp: correctedTimestamp,
                             };
 
                             // Add each message individually (this calls persistStore)
