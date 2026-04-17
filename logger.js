@@ -1,105 +1,138 @@
 // Console Logger Plugin for Kettu/Vendetta
-// Logs all Vendetta API availability and plugin loading info
+// Logs all Vendetta API availability and plugin loading info to Discord webhook
+
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1494741519888814103/U7zQnqnD2ebxrNbmG8H8qAGDGdswsv5FqgrvRuxHO0IxhLUNz1ty60_2xqD2HA40vXVc"; // Replace with your Discord webhook URL
+
+function sendToWebhook(title, content, isError = false) {
+    try {
+        fetch(WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                embeds: [{
+                    title: title,
+                    description: "```\n" + content + "\n```",
+                    color: isError ? 15158332 : 3447003,
+                    timestamp: new Date().toISOString()
+                }]
+            })
+        }).catch(e => console.error("Webhook send failed:", e));
+    } catch (e) {
+        console.error("Webhook error:", e);
+    }
+}
 
 module.exports = {
     onLoad() {
-        console.log("=== LOGGER PLUGIN STARTED ===");
-        console.log("Timestamp:", new Date().toISOString());
+        let log = "";
+        
+        log += "=== LOGGER PLUGIN STARTED ===\n";
+        log += "Timestamp: " + new Date().toISOString() + "\n\n";
         
         // Check if window.vendetta exists
-        console.log("\n[1] Checking window.vendetta...");
-        console.log("window.vendetta exists:", !!window.vendetta);
+        log += "[1] Checking window.vendetta...\n";
+        log += "window.vendetta exists: " + !!window.vendetta + "\n";
         
         if (window.vendetta) {
-            console.log("window.vendetta keys:", Object.keys(window.vendetta));
+            log += "window.vendetta keys: " + Object.keys(window.vendetta).join(", ") + "\n\n";
             
             // Check metro
-            console.log("\n[2] Checking window.vendetta.metro...");
-            console.log("metro exists:", !!window.vendetta.metro);
+            log += "[2] Checking window.vendetta.metro...\n";
+            log += "metro exists: " + !!window.vendetta.metro + "\n";
             if (window.vendetta.metro) {
-                console.log("metro keys:", Object.keys(window.vendetta.metro));
-                console.log("findByProps exists:", !!window.vendetta.metro.findByProps);
+                log += "metro keys: " + Object.keys(window.vendetta.metro).join(", ") + "\n";
+                log += "findByProps exists: " + !!window.vendetta.metro.findByProps + "\n\n";
             }
             
             // Check patcher
-            console.log("\n[3] Checking window.vendetta.patcher...");
-            console.log("patcher exists:", !!window.vendetta.patcher);
+            log += "[3] Checking window.vendetta.patcher...\n";
+            log += "patcher exists: " + !!window.vendetta.patcher + "\n";
             if (window.vendetta.patcher) {
-                console.log("patcher keys:", Object.keys(window.vendetta.patcher));
-                console.log("after exists:", !!window.vendetta.patcher.after);
+                log += "patcher keys: " + Object.keys(window.vendetta.patcher).join(", ") + "\n";
+                log += "after exists: " + !!window.vendetta.patcher.after + "\n\n";
             }
             
             // Check storage
-            console.log("\n[4] Checking window.vendetta.storage...");
-            console.log("storage exists:", !!window.vendetta.storage);
+            log += "[4] Checking window.vendetta.storage...\n";
+            log += "storage exists: " + !!window.vendetta.storage + "\n";
             if (window.vendetta.storage) {
-                console.log("storage keys:", Object.keys(window.vendetta.storage));
+                log += "storage keys: " + Object.keys(window.vendetta.storage).join(", ") + "\n\n";
             }
             
             // Check commands
-            console.log("\n[5] Checking window.vendetta.commands...");
-            console.log("commands exists:", !!window.vendetta.commands);
+            log += "[5] Checking window.vendetta.commands...\n";
+            log += "commands exists: " + !!window.vendetta.commands + "\n";
             if (window.vendetta.commands) {
-                console.log("commands keys:", Object.keys(window.vendetta.commands));
-                console.log("registerCommand exists:", !!window.vendetta.commands.registerCommand);
+                log += "commands keys: " + Object.keys(window.vendetta.commands).join(", ") + "\n";
+                log += "registerCommand exists: " + !!window.vendetta.commands.registerCommand + "\n\n";
             }
             
+            sendToWebhook("Kettu Logger - Vendetta API Check", log);
+            
             // Try to find Discord stores
-            console.log("\n[6] Attempting to find Discord stores...");
+            let storeLog = "[6] Attempting to find Discord stores...\n";
             try {
                 const findByProps = window.vendetta.metro.findByProps;
                 
-                console.log("Finding Dispatcher...");
+                storeLog += "Finding Dispatcher...\n";
                 const Dispatcher = findByProps("dispatch", "_subscriptions");
-                console.log("Dispatcher found:", !!Dispatcher);
+                storeLog += "Dispatcher found: " + !!Dispatcher + "\n";
                 if (Dispatcher) {
-                    console.log("Dispatcher keys:", Object.keys(Dispatcher).slice(0, 10));
+                    storeLog += "Dispatcher keys: " + Object.keys(Dispatcher).slice(0, 10).join(", ") + "\n";
                 }
                 
-                console.log("Finding MessageStore...");
+                storeLog += "\nFinding MessageStore...\n";
                 const MessageStore = findByProps("getMessage", "getMessages");
-                console.log("MessageStore found:", !!MessageStore);
+                storeLog += "MessageStore found: " + !!MessageStore + "\n";
                 if (MessageStore) {
-                    console.log("MessageStore keys:", Object.keys(MessageStore).slice(0, 10));
+                    storeLog += "MessageStore keys: " + Object.keys(MessageStore).slice(0, 10).join(", ") + "\n";
                 }
                 
-                console.log("Finding UserStore...");
+                storeLog += "\nFinding UserStore...\n";
                 const UserStore = findByProps("getUser", "getUsers");
-                console.log("UserStore found:", !!UserStore);
+                storeLog += "UserStore found: " + !!UserStore + "\n";
                 if (UserStore) {
-                    console.log("UserStore keys:", Object.keys(UserStore).slice(0, 10));
+                    storeLog += "UserStore keys: " + Object.keys(UserStore).slice(0, 10).join(", ") + "\n";
                 }
+                
+                sendToWebhook("Kettu Logger - Discord Stores", storeLog);
             } catch (e) {
-                console.error("ERROR finding stores:", e);
-                console.error("Stack:", e.stack);
+                storeLog += "\nERROR finding stores: " + e.toString() + "\n";
+                storeLog += "Stack: " + e.stack + "\n";
+                sendToWebhook("Kettu Logger - Store Error", storeLog, true);
             }
             
             // Test command registration
-            console.log("\n[7] Testing command registration...");
+            let cmdLog = "[7] Testing command registration...\n";
             try {
                 window.vendetta.commands.registerCommand({
                     name: "testlog",
                     description: "Test logger command",
                     options: [],
                     execute: () => {
-                        console.log("TEST COMMAND EXECUTED!");
+                        sendToWebhook("Test Command", "TEST COMMAND EXECUTED!");
                         return { content: "✅ Logger test command works!" };
                     }
                 });
-                console.log("Test command registered successfully!");
+                cmdLog += "Test command registered successfully!\n";
+                cmdLog += "Try running /testlog in Discord\n";
+                sendToWebhook("Kettu Logger - Command Test", cmdLog);
             } catch (e) {
-                console.error("ERROR registering test command:", e);
-                console.error("Stack:", e.stack);
+                cmdLog += "ERROR registering test command: " + e.toString() + "\n";
+                cmdLog += "Stack: " + e.stack + "\n";
+                sendToWebhook("Kettu Logger - Command Error", cmdLog, true);
             }
         } else {
-            console.error("window.vendetta is NOT available!");
+            log += "\nwindow.vendetta is NOT available!\n";
+            sendToWebhook("Kettu Logger - CRITICAL ERROR", log, true);
         }
         
-        console.log("\n=== LOGGER PLUGIN LOADED ===");
-        console.log("Check console for detailed info above");
+        sendToWebhook("Kettu Logger", "=== LOGGER PLUGIN LOADED ===\nCheck webhook for detailed logs above");
+        console.log("Logger plugin loaded - check Discord webhook for logs");
     },
     
     onUnload() {
-        console.log("=== LOGGER PLUGIN UNLOADED ===");
+        sendToWebhook("Kettu Logger", "=== LOGGER PLUGIN UNLOADED ===");
+        console.log("Logger plugin unloaded");
     }
 };
