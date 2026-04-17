@@ -705,6 +705,17 @@
             const nextStore = applyStore(importedRawStore);
             const nextChannelIds = Object.keys(nextStore.messages || {});
 
+            // Inject all imported messages to make them visible
+            if (nextStore.messages && typeof nextStore.messages === "object") {
+                for (const [channelId, channelMessages] of Object.entries(nextStore.messages)) {
+                    if (Array.isArray(channelMessages)) {
+                        for (const message of channelMessages) {
+                            injectCreatedMessage(channelId, message);
+                        }
+                    }
+                }
+            }
+
             notifyChannelsChanged(new Set([...previousChannelIds, ...nextChannelIds]));
             showToast(`Imported ${countMessagesInStore(nextStore)} fake messages from JSON.`);
         } catch (error) {
