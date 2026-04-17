@@ -699,7 +699,7 @@
         }
     }
 
-    async function importFakesFromJson(jsonText) {
+    async function importFakesFromJson(jsonText, silent = false) {
         try {
             const backupPayload = JSON.parse(jsonText);
             const importedRawStore = backupPayload?.version === 1 && backupPayload?.data
@@ -707,7 +707,9 @@
                 : (backupPayload?.messages || backupPayload?.messageIndex ? backupPayload : null);
 
             if (!importedRawStore) {
-                showToast("No fake message backup was found.");
+                if (!silent) {
+                    showToast("No fake message backup was found.");
+                }
                 return;
             }
 
@@ -750,10 +752,16 @@
             // Final persist to ensure everything is saved
             persistStore();
             
-            showToast(`Imported ${totalImported} fake messages from JSON.`);
+            if (!silent) {
+                showToast(`Imported ${totalImported} fake messages from JSON.`);
+            } else {
+                log(`Silently imported ${totalImported} fake messages from JSON`);
+            }
         } catch (error) {
             log("Failed to import fake messages", error);
-            showToast(`Import failed: ${error?.message || "Invalid JSON"}`);
+            if (!silent) {
+                showToast(`Import failed: ${error?.message || "Invalid JSON"}`);
+            }
         }
     }
 
@@ -1025,28 +1033,33 @@
     }
 
     function restoreMessagesOnLoad() {
-        const store = getStore();
-        
-        if (!store.messages || typeof store.messages !== "object") {
-            return;
-        }
+        // Wait for Discord to be fully loaded before restoring messages
+        setTimeout(() => {
+            const store = getStore();
+            
+            if (!store.messages || typeof store.messages !== "object") {
+                return;
+            }
 
-        let restoredCount = 0;
-        
-        // Silently inject all stored messages without showing toasts
-        for (const [channelId, channelMessages] of Object.entries(store.messages)) {
-            if (Array.isArray(channelMessages)) {
-                for (const message of channelMessages) {
-                    // Inject each message silently
-                    injectCreatedMessage(channelId, message);
-                    restoredCount++;
+            let restoredCount = 0;
+            
+            // Inject all stored messages one by one, silently
+            for (const [channelId, channelMessages] of Object.entries(store.messages)) {
+                if (Array.isArray(channelMessages)) {
+                    for (const message of channelMessages) {
+                        // Inject each message silently
+                        if (!injectCreatedMessage(channelId, message)) {
+                            notifyMessageListChanged(channelId);
+                        }
+                        restoredCount++;
+                    }
                 }
             }
-        }
 
-        if (restoredCount > 0) {
-            log(`Restored ${restoredCount} fake messages from storage`);
-        }
+            if (restoredCount > 0) {
+                log(`Restored ${restoredCount} fake messages from storage`);
+            }
+        }, 1000); // Wait 1 second for Discord to fully load
     }
 
     function cleanup() {
