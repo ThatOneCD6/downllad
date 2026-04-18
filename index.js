@@ -799,20 +799,9 @@
             });
         }
 
-        const url = extractFirstUrl(content);
-        if (!url) {
-            return content;
-        }
-
-        const autoPreview = await buildAutoPreviewFromUrl(url);
-        if (!autoPreview) {
-            return content;
-        }
-
-        return JSON.stringify({
-            content,
-            preview: autoPreview,
-        });
+        // Plain-text createfake messages should stay plain text.
+        // Custom previews are only built from JSON payloads.
+        return content;
     }
 
     function parseEmbedColor(value) {
