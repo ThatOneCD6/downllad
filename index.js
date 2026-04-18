@@ -504,6 +504,272 @@
         }
     }
 
+    function isPlainObject(value) {
+        return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    }
+
+    function coerceString(value) {
+        if (typeof value === "string") {
+            const trimmed = value.trim();
+            return trimmed.length > 0 ? trimmed : undefined;
+        }
+
+        if (value == null) {
+            return undefined;
+        }
+
+        const normalized = String(value).trim();
+        return normalized.length > 0 ? normalized : undefined;
+    }
+
+    function pickFirstDefined(source, keys) {
+        for (const key of keys) {
+            if (source?.[key] != null) {
+                return source[key];
+            }
+        }
+
+        return undefined;
+    }
+
+    function parseEmbedColor(value) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+            return Math.max(0, Math.min(0xFFFFFF, Math.trunc(value)));
+        }
+
+        if (typeof value !== "string") {
+            return undefined;
+        }
+
+        const normalized = value.trim().replace(/^#/, "").replace(/^0x/i, "");
+        if (!/^[\dA-Fa-f]{6}$/.test(normalized)) {
+            return undefined;
+        }
+
+        return Number.parseInt(normalized, 16);
+    }
+
+    function normalizeEmbedAsset(value) {
+        if (typeof value === "string") {
+            const url = value.trim();
+            return url ? { url } : undefined;
+        }
+
+        if (!isPlainObject(value)) {
+            return undefined;
+        }
+
+        const url = coerceString(value.url) || coerceString(value.proxy_url) || coerceString(value.proxyUrl);
+        if (!url) {
+            return undefined;
+        }
+
+        return {
+            ...value,
+            url,
+        };
+    }
+
+    function normalizeEmbedFields(value) {
+        if (!Array.isArray(value)) {
+            return undefined;
+        }
+
+        const fields = value
+            .map((field) => {
+                if (!isPlainObject(field)) {
+                    return null;
+                }
+
+                const name = coerceString(field.name);
+                if (!name || field.value == null) {
+                    return null;
+                }
+
+                return {
+                    ...field,
+                    name,
+                    value: String(field.value),
+                    inline: Boolean(field.inline),
+                };
+            })
+            .filter(Boolean);
+
+        return fields.length > 0 ? fields : undefined;
+    }
+
+    function normalizeEmbedTimestamp(value) {
+        if (value == null || value === "") {
+            return undefined;
+        }
+
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return undefined;
+        }
+
+        return date.toISOString();
+    }
+
+    // Supports lightweight JSON preview helpers such as preview/linkPreview.
+    function buildCustomPreviewEmbed(previewInput) {
+        const preview = typeof previewInput === "string"
+            ? { url: previewInput }
+            : previewInput;
+
+        if (!isPlainObject(preview)) {
+            return null;
+        }
+
+        const rawEmbed = isPlainObject(preview.embed) ? { ...preview.embed } : {};
+        const embed = {
+            ...rawEmbed,
+            type: typeof rawEmbed.type === "string"
+                ? rawEmbed.type
+                : (coerceString(preview.type) || "link"),
+        };
+
+        const url = coerceString(pickFirstDefined(preview, ["url", "link", "href"]));
+        const title = coerceString(pickFirstDefined(preview, ["title", "name"]));
+        const description = coerceString(pickFirstDefined(preview, ["description", "desc", "text", "body"]));
+        const providerName = coerceString(
+            pickFirstDefined(preview, ["site_name", "siteName", "provider_name", "providerName"]),
+        ) || (typeof preview.provider === "string" ? coerceString(preview.provider) : undefined);
+        const providerUrl = coerceString(pickFirstDefined(preview, ["provider_url", "providerUrl"]));
+        const authorSource = isPlainObject(preview.author) ? preview.author : {};
+        const authorName = coerceString(authorSource.name)
+            || coerceString(pickFirstDefined(preview, ["author_name", "authorName"]));
+        const authorUrl = coerceString(authorSource.url)
+            || coerceString(pickFirstDefined(preview, ["author_url", "authorUrl"]));
+        const authorIconUrl = coerceString(authorSource.icon_url)
+            || coerceString(authorSource.iconUrl)
+            || coerceString(pickFirstDefined(preview, ["author_icon_url", "authorIconUrl"]));
+        const footerSource = isPlainObject(preview.footer) ? preview.footer : {};
+        const footerText = coerceString(typeof preview.footer === "string" ? preview.footer : footerSource.text)
+            || coerceString(pickFirstDefined(preview, ["footer_text", "footerText"]));
+        const footerIconUrl = coerceString(footerSource.icon_url)
+            || coerceString(footerSource.iconUrl)
+            || coerceString(pickFirstDefined(preview, ["footer_icon_url", "footerIconUrl"]));
+        const color = parseEmbedColor(preview.color);
+        const timestamp = normalizeEmbedTimestamp(preview.timestamp);
+        const image = normalizeEmbedAsset(preview.image);
+        const thumbnail = normalizeEmbedAsset(preview.thumbnail) || normalizeEmbedAsset(preview.thumb);
+        const video = normalizeEmbedAsset(preview.video);
+        const fields = normalizeEmbedFields(preview.fields);
+
+        if (url) embed.url = url;
+        if (title) embed.title = title;
+        if (description) embed.description = description;
+        if (color != null) embed.color = color;
+        if (timestamp) embed.timestamp = timestamp;
+        if (fields) embed.fields = fields;
+
+        if (providerName || providerUrl || isPlainObject(embed.provider)) {
+            embed.provider = {
+                ...(isPlainObject(embed.provider) ? embed.provider : {}),
+                ...(providerName ? { name: providerName } : {}),
+                ...(providerUrl ? { url: providerUrl } : {}),
+            };
+
+            if (!embed.provider.name && !embed.provider.url) {
+                delete embed.provider;
+            }
+        }
+
+        if (authorName || authorUrl || authorIconUrl || isPlainObject(embed.author)) {
+            embed.author = {
+                ...(isPlainObject(embed.author) ? embed.author : {}),
+                ...(authorName ? { name: authorName } : {}),
+                ...(authorUrl ? { url: authorUrl } : {}),
+                ...(authorIconUrl ? { icon_url: authorIconUrl } : {}),
+            };
+
+            if (!embed.author.name && !embed.author.url && !embed.author.icon_url) {
+                delete embed.author;
+            }
+        }
+
+        if (footerText || footerIconUrl || isPlainObject(embed.footer)) {
+            embed.footer = {
+                ...(isPlainObject(embed.footer) ? embed.footer : {}),
+                ...(footerText ? { text: footerText } : {}),
+                ...(footerIconUrl ? { icon_url: footerIconUrl } : {}),
+            };
+
+            if (!embed.footer.text && !embed.footer.icon_url) {
+                delete embed.footer;
+            }
+        }
+
+        if (image) {
+            embed.image = {
+                ...(isPlainObject(embed.image) ? embed.image : {}),
+                ...image,
+            };
+        }
+
+        if (thumbnail) {
+            embed.thumbnail = {
+                ...(isPlainObject(embed.thumbnail) ? embed.thumbnail : {}),
+                ...thumbnail,
+            };
+        }
+
+        if (video) {
+            embed.video = {
+                ...(isPlainObject(embed.video) ? embed.video : {}),
+                ...video,
+            };
+        }
+
+        if (
+            !embed.url
+            && !embed.title
+            && !embed.description
+            && !embed.provider?.name
+            && !embed.author?.name
+            && !embed.image?.url
+            && !embed.thumbnail?.url
+        ) {
+            return null;
+        }
+
+        return embed;
+    }
+
+    function extractPreviewEmbeds(parsed) {
+        if (!isPlainObject(parsed)) {
+            return [];
+        }
+
+        const previewValues = [];
+        const previewKeys = [
+            "preview",
+            "previews",
+            "linkPreview",
+            "linkPreviews",
+            "link_preview",
+            "link_previews",
+            "customPreview",
+            "customPreviews",
+            "custom_preview",
+            "custom_previews",
+        ];
+
+        for (const key of previewKeys) {
+            const value = parsed[key];
+            if (Array.isArray(value)) {
+                previewValues.push(...value);
+            } else if (value != null) {
+                previewValues.push(value);
+            }
+        }
+
+        return previewValues
+            .map(buildCustomPreviewEmbed)
+            .filter(Boolean);
+    }
+
     function parseContent(content) {
         let messageContent = content;
         let embeds = [];
@@ -523,12 +789,35 @@
                     messageContent = "";
                 }
 
+                if (isPlainObject(parsed.embed)) {
+                    embeds.push(parsed.embed);
+                } else if (Array.isArray(parsed.embed)) {
+                    embeds.push(...parsed.embed.filter(isPlainObject));
+                }
+
                 if (Array.isArray(parsed.embeds)) {
-                    embeds = parsed.embeds;
+                    embeds.push(...parsed.embeds.filter(isPlainObject));
                 }
                 if (Array.isArray(parsed.attachments)) {
                     attachments = parsed.attachments;
                 }
+
+                embeds.push(...extractPreviewEmbeds(parsed));
+
+                delete overrides.content;
+                delete overrides.embed;
+                delete overrides.embeds;
+                delete overrides.attachments;
+                delete overrides.preview;
+                delete overrides.previews;
+                delete overrides.linkPreview;
+                delete overrides.linkPreviews;
+                delete overrides.link_preview;
+                delete overrides.link_previews;
+                delete overrides.customPreview;
+                delete overrides.customPreviews;
+                delete overrides.custom_preview;
+                delete overrides.custom_previews;
             }
         } catch {
             // Plain text content is still valid.
@@ -608,8 +897,8 @@
             embeds,
             nonce: overrides.nonce || messageId,
             author: {
-                ...overrideAuthor,
                 ...baseAuthor,
+                ...overrideAuthor,
             },
         };
 
