@@ -49,6 +49,59 @@
         }
     }
 
+    function sanitizeFakeMessage(message) {
+        const safeMessage = isPlainObject(message) ? { ...message } : {};
+        const rawEmbeds = safeMessage.embeds;
+        const rawAttachments = safeMessage.attachments;
+        let payloadError = false;
+
+        safeMessage.type = Number.isInteger(safeMessage.type) ? safeMessage.type : 0;
+        safeMessage.flags = Number.isInteger(safeMessage.flags) ? safeMessage.flags : 0;
+        safeMessage.message_flags = Number.isInteger(safeMessage.message_flags) ? safeMessage.message_flags : 0;
+
+        if (rawEmbeds == null) {
+            safeMessage.embeds = [];
+        } else if (Array.isArray(rawEmbeds)) {
+            const embeds = rawEmbeds
+                .map((embed) => sanitizeEmbedObject(embed, "rich"))
+                .filter(Boolean);
+
+            if (embeds.length !== rawEmbeds.length) {
+                payloadError = true;
+            }
+
+            safeMessage.embeds = payloadError ? [] : embeds;
+        } else {
+            payloadError = true;
+            safeMessage.embeds = [];
+        }
+
+        if (rawAttachments == null) {
+            safeMessage.attachments = [];
+        } else if (Array.isArray(rawAttachments)) {
+            const attachments = rawAttachments.filter(isPlainObject);
+            if (attachments.length !== rawAttachments.length) {
+                payloadError = true;
+            }
+
+            safeMessage.attachments = payloadError ? [] : attachments;
+        } else {
+            payloadError = true;
+            safeMessage.attachments = [];
+        }
+
+        if (typeof safeMessage.content === "string") {
+            safeMessage.content = payloadError ? "error" : safeMessage.content;
+        } else if (safeMessage.content == null) {
+            safeMessage.content = payloadError ? "error" : "";
+        } else {
+            safeMessage.content = payloadError ? "error" : String(safeMessage.content);
+        }
+
+        safeMessage.__hiddenDmFake = true;
+        return safeMessage;
+    }
+
     function sanitizeStore(rawStore) {
         const safeStore = createEmptyStore();
         if (!rawStore || typeof rawStore !== "object") {
@@ -62,10 +115,10 @@
                     .filter((message) => message && typeof message === "object")
                     .map((message) => {
                         const { __hiddenDmFake, __hiddenDmExport, ...cleanMessage } = message;
-                        return {
+                        return sanitizeFakeMessage({
                             ...cleanMessage,
                             __hiddenDmFake: true,
-                        };
+                        });
                     });
             }
         }
@@ -224,13 +277,17 @@
 
     function addMessage(channelId, message) {
         const store = getStore();
+        const safeMessage = sanitizeFakeMessage(message);
         store.messages[channelId] ??= [];
-        store.messages[channelId].push(message);
+        store.messages[channelId].push(safeMessage);
         normalizeIndex();
         persistStore();
 
-        const entry = store.messageIndex.find((item) => item.messageId === message.id);
-        return entry ? entry.index : -1;
+        const entry = store.messageIndex.find((item) => item.messageId === safeMessage.id);
+        return {
+            index: entry ? entry.index : -1,
+            message: safeMessage,
+        };
     }
 
     function getAllMessages() {
@@ -381,27 +438,25 @@
     }
 
     function injectCreatedMessage(channelId, message) {
-        try {
-            if (!state.dispatcher?.dispatch) return false;
-
+        const dispatchMessageCreate = (safeMessage) => {
             state.dispatcher.dispatch({
                 type: "MESSAGE_CREATE",
                 channelId,
                 message: {
-                    ...message,
+                    ...safeMessage,
                     state: "SENT",
-                    flags: message.flags || 0,
+                    flags: safeMessage.flags || 0,
                     blocked: false,
                     pinned: false,
                     tts: false,
                     mention_everyone: false,
-                    mentions: message.mentions || [],
-                    mention_roles: message.mention_roles || [],
-                    reactions: message.reactions || [],
-                    attachments: message.attachments || [],
-                    embeds: message.embeds || [],
+                    mentions: safeMessage.mentions || [],
+                    mention_roles: safeMessage.mention_roles || [],
+                    reactions: safeMessage.reactions || [],
+                    attachments: safeMessage.attachments || [],
+                    embeds: safeMessage.embeds || [],
                     _state: {
-                        messageId: message.id,
+                        messageId: safeMessage.id,
                         channelId,
                         isOptimistic: false,
                         hasBeenEdited: false,
@@ -414,11 +469,30 @@
                 isRead: true,
                 isAcknowledged: true,
             });
+        };
 
+        try {
+            if (!state.dispatcher?.dispatch) return false;
+            dispatchMessageCreate(sanitizeFakeMessage(message));
             return true;
         } catch (error) {
             log("Failed to inject created message", error);
-            return false;
+
+            try {
+                if (!state.dispatcher?.dispatch) return false;
+
+                dispatchMessageCreate(sanitizeFakeMessage({
+                    ...message,
+                    content: "error",
+                    embeds: [],
+                    attachments: [],
+                }));
+
+                return true;
+            } catch (fallbackError) {
+                log("Failed to inject fallback error message", fallbackError);
+                return false;
+            }
         }
     }
 
@@ -611,6 +685,145 @@
         return date.toISOString();
     }
 
+    function normalizeEmbedAuthor(value) {
+        if (!isPlainObject(value)) {
+            return undefined;
+        }
+
+        const name = coerceString(value.name);
+        const url = coerceString(value.url);
+        const iconUrl = coerceString(value.icon_url) || coerceString(value.iconUrl);
+
+        if (!name && !url && !iconUrl) {
+            return undefined;
+        }
+
+        return {
+            ...value,
+            ...(name ? { name } : {}),
+            ...(url ? { url } : {}),
+            ...(iconUrl ? { icon_url: iconUrl } : {}),
+        };
+    }
+
+    function normalizeEmbedFooter(value) {
+        if (!isPlainObject(value)) {
+            return undefined;
+        }
+
+        const text = coerceString(value.text);
+        const iconUrl = coerceString(value.icon_url) || coerceString(value.iconUrl);
+
+        if (!text && !iconUrl) {
+            return undefined;
+        }
+
+        return {
+            ...value,
+            ...(text ? { text } : {}),
+            ...(iconUrl ? { icon_url: iconUrl } : {}),
+        };
+    }
+
+    function normalizeEmbedProvider(value) {
+        if (!isPlainObject(value)) {
+            return undefined;
+        }
+
+        const name = coerceString(value.name);
+        const url = coerceString(value.url);
+
+        if (!name && !url) {
+            return undefined;
+        }
+
+        return {
+            ...value,
+            ...(name ? { name } : {}),
+            ...(url ? { url } : {}),
+        };
+    }
+
+    function sanitizeEmbedObject(rawEmbed, fallbackType = "rich") {
+        if (!isPlainObject(rawEmbed)) {
+            return null;
+        }
+
+        const embed = {
+            ...rawEmbed,
+            type: coerceString(rawEmbed.type) || fallbackType,
+        };
+
+        const title = coerceString(rawEmbed.title);
+        const description = coerceString(rawEmbed.description);
+        const url = coerceString(rawEmbed.url);
+        const timestamp = normalizeEmbedTimestamp(rawEmbed.timestamp);
+        const color = parseEmbedColor(rawEmbed.color);
+        const author = normalizeEmbedAuthor(rawEmbed.author);
+        const footer = normalizeEmbedFooter(rawEmbed.footer);
+        const provider = normalizeEmbedProvider(rawEmbed.provider);
+        const image = normalizeEmbedAsset(rawEmbed.image);
+        const thumbnail = normalizeEmbedAsset(rawEmbed.thumbnail);
+        const video = normalizeEmbedAsset(rawEmbed.video);
+        const fields = normalizeEmbedFields(rawEmbed.fields);
+
+        if (title) embed.title = title; else delete embed.title;
+        if (description) embed.description = description; else delete embed.description;
+        if (url) embed.url = url; else delete embed.url;
+        if (timestamp) embed.timestamp = timestamp; else delete embed.timestamp;
+        if (color != null) embed.color = color; else delete embed.color;
+        if (author) embed.author = author; else delete embed.author;
+        if (footer) embed.footer = footer; else delete embed.footer;
+        if (provider) embed.provider = provider; else delete embed.provider;
+        if (image) embed.image = image; else delete embed.image;
+        if (thumbnail) embed.thumbnail = thumbnail; else delete embed.thumbnail;
+        if (video) embed.video = video; else delete embed.video;
+        if (fields) embed.fields = fields; else delete embed.fields;
+
+        return embed;
+    }
+
+    function extractInlineEmbed(parsed) {
+        if (!isPlainObject(parsed)) {
+            return null;
+        }
+
+        const embedKeys = [
+            "title",
+            "description",
+            "url",
+            "footer",
+            "provider",
+            "image",
+            "thumbnail",
+            "video",
+            "fields",
+            "color",
+            "timestamp",
+        ];
+        const inlineEmbed = {};
+        let hasInlineEmbedData = false;
+
+        for (const key of embedKeys) {
+            if (parsed[key] == null) {
+                continue;
+            }
+
+            inlineEmbed[key] = parsed[key];
+            hasInlineEmbedData = true;
+        }
+
+        if (!hasInlineEmbedData) {
+            return null;
+        }
+
+        if (parsed.type != null) {
+            inlineEmbed.type = parsed.type;
+        }
+
+        return inlineEmbed;
+    }
+
     // Supports lightweight JSON preview helpers such as preview/linkPreview.
     function buildCustomPreviewEmbed(previewInput) {
         const preview = typeof previewInput === "string"
@@ -626,7 +839,7 @@
             ...rawEmbed,
             type: typeof rawEmbed.type === "string"
                 ? rawEmbed.type
-                : (coerceString(preview.type) || "link"),
+                : (coerceString(preview.type) || "rich"),
         };
 
         const url = coerceString(pickFirstDefined(preview, ["url", "link", "href"]));
@@ -789,6 +1002,11 @@
                     messageContent = "";
                 }
 
+                const inlineEmbed = extractInlineEmbed(parsed);
+                if (inlineEmbed) {
+                    embeds.push(inlineEmbed);
+                }
+
                 if (isPlainObject(parsed.embed)) {
                     embeds.push(parsed.embed);
                 } else if (Array.isArray(parsed.embed)) {
@@ -805,6 +1023,18 @@
                 embeds.push(...extractPreviewEmbeds(parsed));
 
                 delete overrides.content;
+                delete overrides.type;
+                delete overrides.title;
+                delete overrides.description;
+                delete overrides.url;
+                delete overrides.footer;
+                delete overrides.provider;
+                delete overrides.image;
+                delete overrides.thumbnail;
+                delete overrides.video;
+                delete overrides.fields;
+                delete overrides.color;
+                delete overrides.timestamp;
                 delete overrides.embed;
                 delete overrides.embeds;
                 delete overrides.attachments;
@@ -902,15 +1132,15 @@
             },
         };
 
-        const index = addMessage(channelId, fakeMessage);
-        if (!injectCreatedMessage(channelId, fakeMessage)) {
+        const storedMessage = addMessage(channelId, fakeMessage);
+        if (!injectCreatedMessage(channelId, storedMessage.message)) {
             notifyMessageListChanged(channelId);
         }
 
         return {
             ok: true,
-            index,
-            message: fakeMessage,
+            index: storedMessage.index,
+            message: storedMessage.message,
         };
     }
 
@@ -1069,10 +1299,10 @@
                             };
 
                             // Add each message individually (this calls persistStore)
-                            addMessage(channelId, messageToAdd);
+                            const storedMessage = addMessage(channelId, messageToAdd);
                             
                             // Inject to make it visible
-                            if (!injectCreatedMessage(channelId, messageToAdd)) {
+                            if (!injectCreatedMessage(channelId, storedMessage.message)) {
                                 notifyMessageListChanged(channelId);
                             }
                             
