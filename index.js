@@ -596,6 +596,27 @@
         return normalized.length > 0 ? normalized : undefined;
     }
 
+    function decodeHtmlEntities(value) {
+        if (typeof value !== "string" || value.indexOf("&") === -1) {
+            return value;
+        }
+
+        return value
+            .replace(/&amp;/gi, "&")
+            .replace(/&quot;/gi, "\"")
+            .replace(/&#39;|&apos;/gi, "'")
+            .replace(/&lt;/gi, "<")
+            .replace(/&gt;/gi, ">")
+            .replace(/&#(\d+);/g, (_, code) => {
+                const parsed = Number.parseInt(code, 10);
+                return Number.isFinite(parsed) ? String.fromCharCode(parsed) : _;
+            })
+            .replace(/&#x([0-9a-f]+);/gi, (_, code) => {
+                const parsed = Number.parseInt(code, 16);
+                return Number.isFinite(parsed) ? String.fromCharCode(parsed) : _;
+            });
+    }
+
     function pickFirstDefined(source, keys) {
         for (const key of keys) {
             if (source?.[key] != null) {
@@ -604,6 +625,194 @@
         }
 
         return undefined;
+    }
+
+    function extractFirstUrl(text) {
+        if (typeof text !== "string") {
+            return undefined;
+        }
+
+        const match = text.match(/https?:\/\/[^\s<>"']+/i);
+        return match ? match[0] : undefined;
+    }
+
+    function parseHtmlMetaTagAttributes(html) {
+        if (typeof html !== "string") {
+            return {};
+        }
+
+        const attributes = {};
+        const attributePattern = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+        let match;
+
+        while ((match = attributePattern.exec(html)) !== null) {
+            const attributeName = match[1]?.toLowerCase?.();
+            const attributeValue = match[3] ?? match[4] ?? match[5] ?? "";
+            if (!attributeName) {
+                continue;
+            }
+
+            attributes[attributeName] = decodeHtmlEntities(attributeValue.trim());
+        }
+
+        return attributes;
+    }
+
+    function getMetaContentByNames(html, names) {
+        if (typeof html !== "string") {
+            return undefined;
+        }
+
+        const metaTagPattern = /<meta\b[^>]*>/gi;
+        let match;
+
+        while ((match = metaTagPattern.exec(html)) !== null) {
+            const attributes = parseHtmlMetaTagAttributes(match[0]);
+            const metaName = attributes.property || attributes.name;
+            if (!metaName || !names.includes(metaName.toLowerCase())) {
+                continue;
+            }
+
+            const content = coerceString(attributes.content);
+            if (content) {
+                return content;
+            }
+        }
+
+        return undefined;
+    }
+
+    function getDocumentTitle(html) {
+        if (typeof html !== "string") {
+            return undefined;
+        }
+
+        const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        return match ? coerceString(decodeHtmlEntities(match[1].replace(/\s+/g, " "))) : undefined;
+    }
+
+    async function fetchTextWithTimeout(url, timeoutMs = 5000) {
+        const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => resolve(null), timeoutMs);
+        });
+
+        const fetchPromise = fetch(url)
+            .then((response) => {
+                if (!response?.ok) {
+                    throw new Error(`Failed to fetch preview: ${response?.status || "unknown"}`);
+                }
+
+                return response.text();
+            })
+            .catch((error) => {
+                log("Failed to fetch URL preview metadata", error);
+                return null;
+            });
+
+        return Promise.race([fetchPromise, timeoutPromise]);
+    }
+
+    function hasExplicitPreviewPayload(parsed) {
+        if (!isPlainObject(parsed)) {
+            return false;
+        }
+
+        return Boolean(
+            parsed.preview
+            || parsed.previews
+            || parsed.linkPreview
+            || parsed.linkPreviews
+            || parsed.link_preview
+            || parsed.link_previews
+            || parsed.customPreview
+            || parsed.customPreviews
+            || parsed.custom_preview
+            || parsed.custom_previews
+            || parsed.embed
+            || parsed.embeds,
+        );
+    }
+
+    async function buildAutoPreviewFromUrl(url) {
+        const normalizedUrl = coerceString(url);
+        if (!normalizedUrl) {
+            return null;
+        }
+
+        const html = await fetchTextWithTimeout(normalizedUrl);
+        if (!html) {
+            return null;
+        }
+
+        const title = getMetaContentByNames(html, ["og:title", "twitter:title"]) || getDocumentTitle(html);
+        const description = getMetaContentByNames(html, ["og:description", "twitter:description", "description"]);
+        const image = getMetaContentByNames(html, ["og:image", "twitter:image", "twitter:image:src"]);
+        const providerName = getMetaContentByNames(html, ["og:site_name"]);
+
+        if (!title && !description && !image && !providerName) {
+            return { url: normalizedUrl };
+        }
+
+        return {
+            url: normalizedUrl,
+            ...(title ? { title } : {}),
+            ...(description ? { description } : {}),
+            ...(image ? { image } : {}),
+            ...(providerName ? { site_name: providerName } : {}),
+        };
+    }
+
+    async function prepareContentForFakeMessage(content) {
+        if (typeof content !== "string") {
+            return content;
+        }
+
+        let parsed;
+        try {
+            parsed = JSON.parse(content);
+        } catch {
+            parsed = null;
+        }
+
+        if (isPlainObject(parsed)) {
+            if (hasExplicitPreviewPayload(parsed)) {
+                return content;
+            }
+
+            const messageContent = typeof parsed.content === "string"
+                ? parsed.content
+                : (parsed.content != null ? String(parsed.content) : "");
+            const url = extractFirstUrl(messageContent);
+            if (!url) {
+                return content;
+            }
+
+            const autoPreview = await buildAutoPreviewFromUrl(url);
+            if (!autoPreview) {
+                return content;
+            }
+
+            return JSON.stringify({
+                ...parsed,
+                content: messageContent,
+                preview: autoPreview,
+            });
+        }
+
+        const url = extractFirstUrl(content);
+        if (!url) {
+            return content;
+        }
+
+        const autoPreview = await buildAutoPreviewFromUrl(url);
+        if (!autoPreview) {
+            return content;
+        }
+
+        return JSON.stringify({
+            content,
+            preview: autoPreview,
+        });
     }
 
     function parseEmbedColor(value) {
@@ -626,7 +835,7 @@
     function normalizeEmbedAsset(value) {
         if (typeof value === "string") {
             const url = value.trim();
-            return url ? { url } : undefined;
+            return url ? { url, proxy_url: url, proxyUrl: url } : undefined;
         }
 
         if (!isPlainObject(value)) {
@@ -641,6 +850,8 @@
         return {
             ...value,
             url,
+            proxy_url: coerceString(value.proxy_url) || coerceString(value.proxyUrl) || url,
+            proxyUrl: coerceString(value.proxyUrl) || coerceString(value.proxy_url) || url,
         };
     }
 
@@ -835,18 +1046,19 @@
         }
 
         const rawEmbed = isPlainObject(preview.embed) ? { ...preview.embed } : {};
+        const inferredType = coerceString(preview.type) || (coerceString(pickFirstDefined(preview, ["url", "link", "href"])) ? "article" : "rich");
         const embed = {
             ...rawEmbed,
             type: typeof rawEmbed.type === "string"
                 ? rawEmbed.type
-                : (coerceString(preview.type) || "rich"),
+                : inferredType,
         };
 
         const url = coerceString(pickFirstDefined(preview, ["url", "link", "href"]));
         const title = coerceString(pickFirstDefined(preview, ["title", "name"]));
         const description = coerceString(pickFirstDefined(preview, ["description", "desc", "text", "body"]));
         const providerName = coerceString(
-            pickFirstDefined(preview, ["site_name", "siteName", "provider_name", "providerName"]),
+            pickFirstDefined(preview, ["provider_name", "providerName"]),
         ) || (typeof preview.provider === "string" ? coerceString(preview.provider) : undefined);
         const providerUrl = coerceString(pickFirstDefined(preview, ["provider_url", "providerUrl"]));
         const authorSource = isPlainObject(preview.author) ? preview.author : {};
@@ -865,8 +1077,11 @@
             || coerceString(pickFirstDefined(preview, ["footer_icon_url", "footerIconUrl"]));
         const color = parseEmbedColor(preview.color);
         const timestamp = normalizeEmbedTimestamp(preview.timestamp);
-        const image = normalizeEmbedAsset(preview.image);
-        const thumbnail = normalizeEmbedAsset(preview.thumbnail) || normalizeEmbedAsset(preview.thumb);
+        const previewImage = normalizeEmbedAsset(preview.image);
+        const fullImage = normalizeEmbedAsset(preview.fullImage) || normalizeEmbedAsset(preview.full_image);
+        const thumbnail = normalizeEmbedAsset(preview.thumbnail)
+            || normalizeEmbedAsset(preview.thumb);
+        const image = fullImage || previewImage;
         const video = normalizeEmbedAsset(preview.video);
         const fields = normalizeEmbedFields(preview.fields);
 
@@ -1397,6 +1612,19 @@
         };
     }
 
+    async function createFakeMessageFromCommand(parsed) {
+        try {
+            const preparedContent = await prepareContentForFakeMessage(parsed.content);
+            const result = createFakeMessage(parsed.channelId, parsed.userId, preparedContent, parsed.timestamp);
+            if (!result?.ok) {
+                showToast(result?.error || "Failed to create fake message.");
+            }
+        } catch (error) {
+            log("Failed to create fake message from command", error);
+            showToast("Failed to create fake message.");
+        }
+    }
+
     function handlePrefixCommand(rawContent, channelId) {
         const trimmed = rawContent.trim();
         if (!trimmed.startsWith(COMMAND_PREFIX)) return false;
@@ -1469,11 +1697,7 @@
                 return true;
             }
 
-            const result = createFakeMessage(parsed.channelId, parsed.userId, parsed.content, parsed.timestamp);
-            if (!result?.ok) {
-                showToast(result?.error || "Failed to create fake message.");
-            }
-
+            void createFakeMessageFromCommand(parsed);
             return true;
         }
 
